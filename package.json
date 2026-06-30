@@ -5,8 +5,8 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "pack": "electron-builder --linux deb",
-    "pack:arm64": "electron-builder --linux deb --arm64",
+    "pack": "electron-builder --linux deb --publish never",
+    "pack:arm64": "electron-builder --linux deb --arm64 --publish never",
     "pack:wsl": "bash scripts/build-arm64-deb.sh"
   },
   "author": "",
@@ -19,6 +19,7 @@
     "appId": "com.autocheckbox.browser",
     "productName": "啄木鸟自动勾选浏览器",
     "icon": "woodpecker.png",
+    "publish": null,
     "directories": {
       "output": "dist"
     },
