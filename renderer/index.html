@@ -19,8 +19,15 @@
       <button id="btn-back" class="nav-btn" title="后退">←</button>
       <button id="btn-forward" class="nav-btn" title="前进">→</button>
       <button id="btn-reload" class="nav-btn" title="刷新">↻</button>
+      <button id="btn-bookmark" class="nav-btn bookmark-btn" title="存入标签">☆</button>
       <input id="url-input" class="url-input" type="text" placeholder="输入网址后按回车，例如 https://example.com" spellcheck="false">
       <button id="btn-go" class="nav-btn go-btn">前往</button>
+    </div>
+
+    <!-- 已存标签栏（书签） -->
+    <div id="bookmark-bar" class="bookmark-bar">
+      <span class="bookmark-label">已存标签</span>
+      <div id="bookmark-list" class="bookmark-list"></div>
     </div>
 
     <!-- 自动勾选工具栏 -->
@@ -28,7 +35,7 @@
       <span class="tool-label">自动勾选工具</span>
       <button id="btn-start" class="tool-btn start-btn">开始自动勾选</button>
       <button id="btn-stop" class="tool-btn stop-btn" disabled>停止</button>
-      <div id="status-text" class="status-text">状态：请先打开网页并登录，再点击「开始自动勾选」</div>
+      <div id="status-text" class="status-text">状态：请先打开网页并登录，再点击「开始自动勾选」（登录状态会自动保留）</div>
     </div>
 
   <!-- 日志 -->

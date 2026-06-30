@@ -48,6 +48,10 @@ else
 fi
 
 echo ""
+echo ">> 同步图标（从 woodpecker.png 生成 build/icons）..."
+npm run icons:sync
+
+echo ""
 echo ">> 开始打包 ARM64 deb（约 3～10 分钟，视网速而定）..."
 npm run pack:arm64
 

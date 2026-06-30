@@ -33,7 +33,7 @@ jobs:
       - name: 安装项目依赖
         run: npm ci
 
-      - name: 打包 ARM64 deb
+      - name: 同步图标并打包 ARM64 deb
         run: npm run pack:arm64
 
       - name: 上传 deb 安装包（可下载）

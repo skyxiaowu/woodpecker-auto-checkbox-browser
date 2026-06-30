@@ -84,6 +84,7 @@ const DEFAULT_HOME = 'about:blank';
 const PAGE_WAIT_MS = 800;
 const AFTER_CLICK_MS = 1500;
 const MAX_PAGES = 500;
+const BOOKMARKS_KEY = 'zhuomuniao-bookmarks';
 
 let tabIdCounter = 0;
 let activeTabId = null;
@@ -105,6 +106,118 @@ const btnGo = document.getElementById('btn-go');
 const btnNewTab = document.getElementById('btn-new-tab');
 const btnStart = document.getElementById('btn-start');
 const btnStop = document.getElementById('btn-stop');
+const btnBookmark = document.getElementById('btn-bookmark');
+const bookmarkListEl = document.getElementById('bookmark-list');
+
+let bookmarks = [];
+
+function isValidBookmarkUrl(url) {
+  return url && url !== DEFAULT_HOME && !url.startsWith('about:') && /^https?:\/\//i.test(url);
+}
+
+function loadBookmarks() {
+  try {
+    const raw = localStorage.getItem(BOOKMARKS_KEY);
+    bookmarks = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(bookmarks)) bookmarks = [];
+  } catch (_err) {
+    bookmarks = [];
+  }
+}
+
+function saveBookmarks() {
+  localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
+}
+
+function getCurrentPageInfo() {
+  const webview = getActiveWebview();
+  if (!webview) return null;
+
+  const url = webview.getURL();
+  if (!isValidBookmarkUrl(url)) return null;
+
+  const tab = getActiveTab();
+  const title = tab?.titleEl?.textContent?.trim() || url;
+  return { url, title };
+}
+
+function isCurrentPageBookmarked() {
+  const info = getCurrentPageInfo();
+  if (!info) return false;
+  return bookmarks.some((item) => item.url === info.url);
+}
+
+function updateBookmarkButton() {
+  const bookmarked = isCurrentPageBookmarked();
+  btnBookmark.textContent = bookmarked ? '★' : '☆';
+  btnBookmark.classList.toggle('active', bookmarked);
+  btnBookmark.title = bookmarked ? '取消存入标签' : '存入标签';
+}
+
+function renderBookmarks() {
+  bookmarkListEl.innerHTML = '';
+
+  if (bookmarks.length === 0) {
+    const empty = document.createElement('span');
+    empty.className = 'bookmark-empty';
+    empty.textContent = '点击地址栏右侧 ☆ 保存当前网页';
+    bookmarkListEl.appendChild(empty);
+    return;
+  }
+
+  bookmarks.forEach((item) => {
+    const chip = document.createElement('div');
+    chip.className = 'bookmark-item';
+    chip.title = item.url;
+
+    const titleEl = document.createElement('span');
+    titleEl.className = 'bookmark-item-title';
+    titleEl.textContent = item.title || item.url;
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'bookmark-item-remove';
+    removeBtn.textContent = '×';
+    removeBtn.title = '删除标签';
+
+    chip.addEventListener('click', () => {
+      navigateActive(item.url);
+    });
+
+    removeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      bookmarks = bookmarks.filter((b) => b.url !== item.url);
+      saveBookmarks();
+      renderBookmarks();
+      updateBookmarkButton();
+    });
+
+    chip.appendChild(titleEl);
+    chip.appendChild(removeBtn);
+    bookmarkListEl.appendChild(chip);
+  });
+}
+
+function toggleBookmark() {
+  const info = getCurrentPageInfo();
+  if (!info) {
+    setStatus('请先打开一个有效网页再存入标签');
+    addLog('当前页面无法存入标签', 'warn');
+    return;
+  }
+
+  const existingIndex = bookmarks.findIndex((item) => item.url === info.url);
+  if (existingIndex >= 0) {
+    bookmarks.splice(existingIndex, 1);
+    addLog(`已取消标签：${info.title}`, 'warn');
+  } else {
+    bookmarks.unshift({ url: info.url, title: info.title, addedAt: Date.now() });
+    addLog(`已存入标签：${info.title}`, 'ok');
+  }
+
+  saveBookmarks();
+  renderBookmarks();
+  updateBookmarkButton();
+}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -209,20 +322,32 @@ function bindWebviewEvents(tab) {
   webview.addEventListener('did-stop-loading', () => {
     if (tab.id === activeTabId) {
       updateNavButtons();
+      updateBookmarkButton();
       if (!autoCheckRunning) {
-        setStatus('就绪。登录后点击「开始自动勾选」');
+        setStatus('就绪。登录后点击「开始自动勾选」（登录状态会自动保留）');
       }
     }
   });
 
   webview.addEventListener('page-title-updated', (e) => {
     tab.titleEl.textContent = e.title || '新标签页';
+    const url = webview.getURL();
+    const bookmark = bookmarks.find((item) => item.url === url);
+    if (bookmark && e.title) {
+      bookmark.title = e.title;
+      saveBookmarks();
+      renderBookmarks();
+    }
+    if (tab.id === activeTabId) {
+      updateBookmarkButton();
+    }
   });
 
   webview.addEventListener('did-navigate', (e) => {
     tab.url = e.url;
     if (tab.id === activeTabId) {
       urlInput.value = e.url === DEFAULT_HOME ? '' : e.url;
+      updateBookmarkButton();
     }
   });
 
@@ -230,6 +355,7 @@ function bindWebviewEvents(tab) {
     tab.url = e.url;
     if (tab.id === activeTabId) {
       urlInput.value = e.url === DEFAULT_HOME ? '' : e.url;
+      updateBookmarkButton();
     }
   });
 
@@ -261,8 +387,9 @@ function switchTab(id) {
   updateNavButtons();
 
   if (!autoCheckRunning) {
-    setStatus('就绪。登录后点击「开始自动勾选」');
+    setStatus('就绪。登录后点击「开始自动勾选」（登录状态会自动保留）');
   }
+  updateBookmarkButton();
 }
 
 function closeTab(id) {
@@ -456,5 +583,9 @@ btnReload.addEventListener('click', () => {
 
 btnStart.addEventListener('click', runAutoCheck);
 btnStop.addEventListener('click', stopAutoCheck);
+btnBookmark.addEventListener('click', toggleBookmark);
 
+loadBookmarks();
+renderBookmarks();
+updateBookmarkButton();
 createTab();

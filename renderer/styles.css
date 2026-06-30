@@ -151,6 +151,94 @@ body {
   font-size: 13px;
 }
 
+.bookmark-btn {
+  font-size: 20px;
+  line-height: 1;
+  color: #888;
+}
+
+.bookmark-btn.active {
+  color: #f5a623;
+}
+
+.bookmark-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: #f5f7fa;
+  border-bottom: 1px solid #ddd;
+  flex-shrink: 0;
+  min-height: 32px;
+}
+
+.bookmark-label {
+  font-size: 12px;
+  color: #666;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.bookmark-list {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+  overflow-x: auto;
+  align-items: center;
+}
+
+.bookmark-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 220px;
+  height: 26px;
+  padding: 0 8px 0 10px;
+  border: 1px solid #ccd6e0;
+  border-radius: 13px;
+  background: #fff;
+  font-size: 12px;
+  color: #333;
+  cursor: pointer;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.bookmark-item:hover {
+  background: #e8f0fe;
+  border-color: #4a90d9;
+}
+
+.bookmark-item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bookmark-item-remove {
+  width: 16px;
+  height: 16px;
+  border: none;
+  background: transparent;
+  color: #999;
+  font-size: 14px;
+  line-height: 14px;
+  cursor: pointer;
+  border-radius: 50%;
+  flex-shrink: 0;
+  padding: 0;
+}
+
+.bookmark-item-remove:hover {
+  background: #ddd;
+  color: #333;
+}
+
+.bookmark-empty {
+  font-size: 12px;
+  color: #aaa;
+}
+
 /* 自动勾选工具栏 */
 .tool-bar {
   display: flex;
