@@ -108,8 +108,38 @@ const btnStart = document.getElementById('btn-start');
 const btnStop = document.getElementById('btn-stop');
 const btnBookmark = document.getElementById('btn-bookmark');
 const bookmarkListEl = document.getElementById('bookmark-list');
+const bootErrorEl = document.getElementById('boot-error');
 
 let bookmarks = [];
+
+function showBootError(message) {
+  if (!bootErrorEl) return;
+  bootErrorEl.hidden = false;
+  bootErrorEl.textContent = message;
+  console.error('[renderer-error]', message);
+}
+
+function getWebviewUrl(webview) {
+  if (!webview) return '';
+  try {
+    if (typeof webview.getURL === 'function') {
+      const url = webview.getURL();
+      if (url) return url;
+    }
+  } catch (_err) {
+    // webview 尚未 dom-ready 时 getURL 可能抛错
+  }
+  return webview.getAttribute('src') || webview.src || '';
+}
+
+function configureWebview(webview) {
+  webview.partition = 'persist:main';
+  webview.setAttribute('allowpopups', '');
+  webview.setAttribute(
+    'webpreferences',
+    'contextIsolation=yes,nodeIntegration=no,sandbox=no,webSecurity=yes'
+  );
+}
 
 function isValidBookmarkUrl(url) {
   return url && url !== DEFAULT_HOME && !url.startsWith('about:') && /^https?:\/\//i.test(url);
@@ -126,18 +156,22 @@ function loadBookmarks() {
 }
 
 function saveBookmarks() {
-  localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
+  try {
+    localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
+  } catch (_err) {
+    // localStorage 不可用时忽略
+  }
 }
 
 function getCurrentPageInfo() {
   const webview = getActiveWebview();
   if (!webview) return null;
 
-  const url = webview.getURL();
+  const url = getWebviewUrl(webview);
   if (!isValidBookmarkUrl(url)) return null;
 
   const tab = getActiveTab();
-  const title = tab?.titleEl?.textContent?.trim() || url;
+  const title = (tab && tab.titleEl && tab.titleEl.textContent.trim()) || url;
   return { url, title };
 }
 
@@ -148,13 +182,20 @@ function isCurrentPageBookmarked() {
 }
 
 function updateBookmarkButton() {
-  const bookmarked = isCurrentPageBookmarked();
-  btnBookmark.textContent = bookmarked ? '★' : '☆';
-  btnBookmark.classList.toggle('active', bookmarked);
-  btnBookmark.title = bookmarked ? '取消存入标签' : '存入标签';
+  if (!btnBookmark) return;
+  try {
+    const bookmarked = isCurrentPageBookmarked();
+    btnBookmark.textContent = bookmarked ? '★' : '☆';
+    btnBookmark.classList.toggle('active', bookmarked);
+    btnBookmark.title = bookmarked ? '取消存入标签' : '存入标签';
+  } catch (_err) {
+    btnBookmark.textContent = '☆';
+    btnBookmark.classList.remove('active');
+  }
 }
 
 function renderBookmarks() {
+  if (!bookmarkListEl) return;
   bookmarkListEl.innerHTML = '';
 
   if (bookmarks.length === 0) {
@@ -286,9 +327,8 @@ function createTab(url = DEFAULT_HOME) {
   tabsEl.appendChild(tabEl);
 
   const webview = document.createElement('webview');
+  configureWebview(webview);
   webview.src = url;
-  webview.partition = 'persist:main';
-  webview.setAttribute('allowpopups', '');
   webview.classList.add('active');
   webviewContainer.appendChild(webview);
 
@@ -331,7 +371,7 @@ function bindWebviewEvents(tab) {
 
   webview.addEventListener('page-title-updated', (e) => {
     tab.titleEl.textContent = e.title || '新标签页';
-    const url = webview.getURL();
+    const url = getWebviewUrl(webview);
     const bookmark = bookmarks.find((item) => item.url === url);
     if (bookmark && e.title) {
       bookmark.title = e.title;
@@ -480,7 +520,7 @@ async function runAutoCheck() {
     return;
   }
 
-  const currentUrl = webview.getURL();
+  const currentUrl = getWebviewUrl(webview);
   if (!currentUrl || currentUrl === DEFAULT_HOME || currentUrl.startsWith('about:')) {
     setStatus('请先在地址栏输入网址并打开网页');
     addLog('请先输入网址', 'warn');
@@ -558,34 +598,59 @@ function stopAutoCheck() {
   setStatus('正在停止…');
 }
 
-btnNewTab.addEventListener('click', () => createTab());
+function bindUiEvents() {
+  btnNewTab.addEventListener('click', () => createTab());
+  btnGo.addEventListener('click', () => navigateActive(urlInput.value));
+  urlInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') navigateActive(urlInput.value);
+  });
+  btnBack.addEventListener('click', () => {
+    const webview = getActiveWebview();
+    if (webview && webview.canGoBack()) webview.goBack();
+  });
+  btnForward.addEventListener('click', () => {
+    const webview = getActiveWebview();
+    if (webview && webview.canGoForward()) webview.goForward();
+  });
+  btnReload.addEventListener('click', () => {
+    const webview = getActiveWebview();
+    if (webview) webview.reload();
+  });
+  btnStart.addEventListener('click', runAutoCheck);
+  btnStop.addEventListener('click', stopAutoCheck);
+  if (btnBookmark) {
+    btnBookmark.addEventListener('click', toggleBookmark);
+  }
+}
 
-btnGo.addEventListener('click', () => navigateActive(urlInput.value));
+function bootstrapApp() {
+  if (!tabsEl || !webviewContainer || !urlInput) {
+    showBootError('界面元素加载失败，请重新安装软件或联系技术支持。');
+    return;
+  }
 
-urlInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') navigateActive(urlInput.value);
+  try {
+    bindUiEvents();
+    loadBookmarks();
+    renderBookmarks();
+    createTab();
+    updateBookmarkButton();
+  } catch (err) {
+    showBootError(`界面初始化失败：${err.message}\n\n请尝试在终端运行 auto-checkbox-browser 查看详细报错。`);
+  }
+}
+
+window.addEventListener('error', (event) => {
+  showBootError(`脚本运行错误：${event.message}\n${event.filename || ''}:${event.lineno || ''}`);
 });
 
-btnBack.addEventListener('click', () => {
-  const webview = getActiveWebview();
-  if (webview && webview.canGoBack()) webview.goBack();
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason && event.reason.message ? event.reason.message : String(event.reason);
+  showBootError(`未处理的异步错误：${reason}`);
 });
 
-btnForward.addEventListener('click', () => {
-  const webview = getActiveWebview();
-  if (webview && webview.canGoForward()) webview.goForward();
-});
-
-btnReload.addEventListener('click', () => {
-  const webview = getActiveWebview();
-  if (webview) webview.reload();
-});
-
-btnStart.addEventListener('click', runAutoCheck);
-btnStop.addEventListener('click', stopAutoCheck);
-btnBookmark.addEventListener('click', toggleBookmark);
-
-loadBookmarks();
-renderBookmarks();
-updateBookmarkButton();
-createTab();
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', bootstrapApp);
+} else {
+  bootstrapApp();
+}

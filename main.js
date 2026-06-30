@@ -4,10 +4,12 @@ const path = require('path');
 
 let mainWindow;
 
-// 银河麒麟等 Linux 桌面需关闭 Chromium 沙箱，否则可能出现白屏或 webview 无法加载
+// 银河麒麟等 Linux 桌面：关闭沙箱与硬件加速，避免整窗白屏 / webview 无法渲染
 if (process.platform === 'linux') {
+  app.disableHardwareAcceleration();
   app.commandLine.appendSwitch('no-sandbox');
   app.commandLine.appendSwitch('disable-gpu-sandbox');
+  app.commandLine.appendSwitch('disable-gpu');
 }
 
 function resolveIconPath() {
@@ -114,6 +116,20 @@ function createWindow() {
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
     console.error('界面加载失败:', errorCode, errorDescription, validatedURL);
   });
+
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error('渲染进程异常退出:', details);
+  });
+
+  mainWindow.webContents.on('console-message', (_event, _level, message) => {
+    if (message.includes('[renderer-error]')) {
+      console.error(message);
+    }
+  });
+
+  if (!fs.existsSync(rendererHtml)) {
+    console.error('找不到界面文件:', rendererHtml);
+  }
 
   mainWindow.loadFile(rendererHtml).catch((err) => {
     console.error('loadFile 失败:', rendererHtml, err);
