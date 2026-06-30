@@ -10,7 +10,7 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     title: '啄木鸟自动勾选浏览器',
-    icon: path.join(__dirname, 'woodpecker.jpg'),
+    icon: path.join(__dirname, 'woodpecker.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

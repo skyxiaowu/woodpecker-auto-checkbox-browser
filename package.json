@@ -18,11 +18,12 @@
   "build": {
     "appId": "com.autocheckbox.browser",
     "productName": "啄木鸟自动勾选浏览器",
-    "icon": "woodpecker.jpg",
+    "icon": "woodpecker.png",
     "directories": {
       "output": "dist"
     },
     "linux": {
+      "icon": "woodpecker.png",
       "target": ["deb"],
       "category": "Network",
       "maintainer": "user@local",
