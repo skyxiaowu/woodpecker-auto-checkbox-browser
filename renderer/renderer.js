@@ -1,31 +1,83 @@
 const CHECK_ALL_SCRIPT = `(() => {
   let count = 0;
-  document.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
-    if (!cb.disabled && !cb.checked) {
-      cb.click();
-      count++;
+
+  function collectRoots(root) {
+    const roots = [root];
+    root.querySelectorAll('*').forEach((el) => {
+      if (el.shadowRoot) roots.push(el.shadowRoot);
+    });
+    return roots;
+  }
+
+  function processDocument(doc) {
+    if (!doc) return;
+    for (const root of collectRoots(doc)) {
+      root.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+        if (!cb.disabled && !cb.checked) {
+          cb.click();
+          count++;
+        }
+      });
     }
-  });
+    doc.querySelectorAll('iframe, frame, object, embed').forEach((frameEl) => {
+      try {
+        const innerDoc = frameEl.contentDocument
+          || frameEl.contentWindow?.document
+          || frameEl.getSVGDocument?.();
+        processDocument(innerDoc);
+      } catch (_err) {
+        // 跨域子页面无法直接访问，由主进程逐帧注入脚本处理
+      }
+    });
+  }
+
+  processDocument(document);
   return count;
 })()`;
 
 const CLICK_NEXT_SCRIPT = `(() => {
   const tags = ['a', 'button', 'span', 'div', 'li', 'input[type="button"]', '[role="button"]'];
-  const seen = new Set();
-  for (const tag of tags) {
-    for (const el of document.querySelectorAll(tag)) {
-      if (seen.has(el)) continue;
-      seen.add(el);
-      const text = (el.innerText || el.textContent || '').trim();
-      if (text !== '下一页') continue;
-      const style = window.getComputedStyle(el);
-      if (style.display === 'none' || style.visibility === 'hidden') continue;
-      if (el.disabled || el.classList.contains('disabled') || el.getAttribute('aria-disabled') === 'true') continue;
-      el.click();
-      return true;
-    }
+
+  function collectRoots(root) {
+    const roots = [root];
+    root.querySelectorAll('*').forEach((el) => {
+      if (el.shadowRoot) roots.push(el.shadowRoot);
+    });
+    return roots;
   }
-  return false;
+
+  function tryClickInDocument(doc) {
+    if (!doc) return false;
+    const seen = new Set();
+    for (const root of collectRoots(doc)) {
+      for (const tag of tags) {
+        for (const el of root.querySelectorAll(tag)) {
+          if (seen.has(el)) continue;
+          seen.add(el);
+          const text = (el.innerText || el.textContent || '').trim();
+          if (text !== '下一页') continue;
+          const style = window.getComputedStyle(el);
+          if (style.display === 'none' || style.visibility === 'hidden') continue;
+          if (el.disabled || el.classList.contains('disabled') || el.getAttribute('aria-disabled') === 'true') continue;
+          el.click();
+          return true;
+        }
+      }
+    }
+    for (const frameEl of doc.querySelectorAll('iframe, frame, object, embed')) {
+      try {
+        const innerDoc = frameEl.contentDocument
+          || frameEl.contentWindow?.document
+          || frameEl.getSVGDocument?.();
+        if (tryClickInDocument(innerDoc)) return true;
+      } catch (_err) {
+        // 跨域子页面无法直接访问
+      }
+    }
+    return false;
+  }
+
+  return tryClickInDocument(document);
 })()`;
 
 const DEFAULT_HOME = 'about:blank';
@@ -266,6 +318,31 @@ function waitForWebviewLoad(webview, timeoutMs = 30000) {
   });
 }
 
+function getWebviewGuestId(webview) {
+  if (typeof webview.getWebContentsId === 'function') {
+    return webview.getWebContentsId();
+  }
+  throw new Error('当前环境不支持多框架脚本注入，请更新 Electron 版本');
+}
+
+async function executeInAllFrames(webview, script, mode = 'all') {
+  try {
+    const guestId = getWebviewGuestId(webview);
+    return await window.electronAPI.executeInAllFrames(guestId, script, mode);
+  } catch (_err) {
+    const result = await webview.executeJavaScript(script);
+    return [result];
+  }
+}
+
+function sumFrameResults(results) {
+  return results.reduce((sum, value) => sum + (typeof value === 'number' ? value : 0), 0);
+}
+
+function hasTruthyFrameResult(results) {
+  return results.some((value) => value === true);
+}
+
 async function runAutoCheck() {
   if (autoCheckRunning) return;
 
@@ -302,7 +379,8 @@ async function runAutoCheck() {
 
       let count = 0;
       try {
-        count = await webview.executeJavaScript(CHECK_ALL_SCRIPT);
+        const frameResults = await executeInAllFrames(webview, CHECK_ALL_SCRIPT);
+        count = sumFrameResults(frameResults);
       } catch (err) {
         addLog(`第 ${pageNum} 页勾选失败：${err.message}`, 'err');
         setStatus('勾选失败，请确认已登录且页面中有表格');
@@ -316,7 +394,8 @@ async function runAutoCheck() {
 
       let hasNext = false;
       try {
-        hasNext = await webview.executeJavaScript(CLICK_NEXT_SCRIPT);
+        const frameResults = await executeInAllFrames(webview, CLICK_NEXT_SCRIPT, 'first-true');
+        hasNext = hasTruthyFrameResult(frameResults);
       } catch (err) {
         addLog(`查找下一页失败：${err.message}`, 'err');
         break;

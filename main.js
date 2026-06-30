@@ -1,7 +1,42 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, ipcMain, webContents, nativeImage } = require('electron');
 const path = require('path');
 
 let mainWindow;
+
+const iconPath = path.join(__dirname, 'woodpecker.png');
+const appIcon = nativeImage.createFromPath(iconPath);
+
+function getAllFrames(frame) {
+  const frames = [frame];
+  for (const child of frame.frames) {
+    frames.push(...getAllFrames(child));
+  }
+  return frames;
+}
+
+ipcMain.handle('webview:execute-in-all-frames', async (_event, guestWebContentsId, script, mode) => {
+  const wc = webContents.fromId(guestWebContentsId);
+  if (!wc || wc.isDestroyed()) {
+    throw new Error('无法访问网页内容，请刷新页面后重试');
+  }
+
+  const frames = getAllFrames(wc.mainFrame);
+  const results = [];
+
+  for (const frame of frames) {
+    try {
+      const result = await frame.executeJavaScript(script, true);
+      results.push(result);
+      if (mode === 'first-true' && result === true) {
+        return results;
+      }
+    } catch (_err) {
+      // 某些子框架可能暂时不可访问，跳过即可
+    }
+  }
+
+  return results;
+});
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -10,7 +45,7 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     title: '啄木鸟自动勾选浏览器',
-    icon: path.join(__dirname, 'woodpecker.png'),
+    icon: appIcon.isEmpty() ? iconPath : appIcon,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
