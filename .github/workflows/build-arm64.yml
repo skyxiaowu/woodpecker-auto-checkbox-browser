@@ -1,0 +1,44 @@
+# GitHub Actions：自动在云端 Linux 上打出 ARM64 的 deb 安装包
+#
+# 触发方式：
+#   1. 手动：GitHub 仓库 → Actions → 选本 workflow → Run workflow
+#   2. 自动：向 main 或 master 分支 push 代码时
+
+name: 打包 ARM64 deb
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  build-deb:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: 安装 deb 打包工具
+        run: sudo apt-get update && sudo apt-get install -y dpkg fakeroot
+
+      - name: 安装项目依赖
+        run: npm ci
+
+      - name: 打包 ARM64 deb
+        run: npm run pack:arm64
+
+      - name: 上传 deb 安装包（可下载）
+        uses: actions/upload-artifact@v4
+        with:
+          name: zhuomuniao-auto-checkbox-browser-arm64-deb
+          path: dist/*.deb
+          retention-days: 30

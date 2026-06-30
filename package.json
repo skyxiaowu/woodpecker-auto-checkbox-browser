@@ -1,0 +1,35 @@
+{
+  "name": "auto-checkbox-browser",
+  "version": "1.0.0",
+  "description": "啄木鸟自动勾选浏览器，带自动勾选功能的简易浏览器，适用于银河麒麟 V10",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --linux deb",
+    "pack:arm64": "electron-builder --linux deb --arm64",
+    "pack:wsl": "bash scripts/build-arm64-deb.sh"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.3.3",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.autocheckbox.browser",
+    "productName": "啄木鸟自动勾选浏览器",
+    "icon": "woodpecker.jpg",
+    "directories": {
+      "output": "dist"
+    },
+    "linux": {
+      "target": ["deb"],
+      "category": "Network",
+      "maintainer": "user@local",
+      "synopsis": "啄木鸟自动勾选浏览器，带自动勾选表格复选框功能"
+    },
+    "deb": {
+      "depends": []
+    }
+  }
+}

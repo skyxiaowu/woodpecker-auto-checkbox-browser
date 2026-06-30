@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>啄木鸟自动勾选浏览器</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <!-- 标签栏 -->
+    <div class="tab-bar">
+      <div id="tabs" class="tabs"></div>
+      <button id="btn-new-tab" class="tab-add" title="新建标签">+</button>
+    </div>
+
+    <!-- 地址栏（与一般浏览器位置相同） -->
+    <div class="nav-bar">
+      <button id="btn-back" class="nav-btn" title="后退">←</button>
+      <button id="btn-forward" class="nav-btn" title="前进">→</button>
+      <button id="btn-reload" class="nav-btn" title="刷新">↻</button>
+      <input id="url-input" class="url-input" type="text" placeholder="输入网址后按回车，例如 https://example.com" spellcheck="false">
+      <button id="btn-go" class="nav-btn go-btn">前往</button>
+    </div>
+
+    <!-- 自动勾选工具栏 -->
+    <div class="tool-bar">
+      <span class="tool-label">自动勾选工具</span>
+      <button id="btn-start" class="tool-btn start-btn">开始自动勾选</button>
+      <button id="btn-stop" class="tool-btn stop-btn" disabled>停止</button>
+      <div id="status-text" class="status-text">状态：请先打开网页并登录，再点击「开始自动勾选」</div>
+    </div>
+
+  <!-- 日志 -->
+    <div id="log-panel" class="log-panel"></div>
+
+    <!-- 网页区域 -->
+    <div id="webview-container" class="webview-container"></div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
