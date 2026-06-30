@@ -84,11 +84,13 @@ const DEFAULT_HOME = 'about:blank';
 const PAGE_WAIT_MS = 800;
 const AFTER_CLICK_MS = 1500;
 const MAX_PAGES = 500;
-const BOOKMARKS_KEY = 'zhuomuniao-bookmarks';
+const BOOKMARK_STORAGE_KEY = 'zhuomuniao.bookmarks.v1';
+const MAX_BOOKMARKS = 80;
 
 let tabIdCounter = 0;
 let activeTabId = null;
 const tabs = new Map();
+let bookmarks = [];
 
 let autoCheckRunning = false;
 let autoCheckAbort = false;
@@ -98,167 +100,16 @@ const webviewContainer = document.getElementById('webview-container');
 const urlInput = document.getElementById('url-input');
 const statusText = document.getElementById('status-text');
 const logPanel = document.getElementById('log-panel');
+const bookmarkBarEl = document.getElementById('bookmark-bar');
 
 const btnBack = document.getElementById('btn-back');
 const btnForward = document.getElementById('btn-forward');
 const btnReload = document.getElementById('btn-reload');
 const btnGo = document.getElementById('btn-go');
+const btnBookmark = document.getElementById('btn-bookmark');
 const btnNewTab = document.getElementById('btn-new-tab');
 const btnStart = document.getElementById('btn-start');
 const btnStop = document.getElementById('btn-stop');
-const btnBookmark = document.getElementById('btn-bookmark');
-const bookmarkListEl = document.getElementById('bookmark-list');
-const bootErrorEl = document.getElementById('boot-error');
-
-let bookmarks = [];
-
-function showBootError(message) {
-  if (!bootErrorEl) return;
-  bootErrorEl.hidden = false;
-  bootErrorEl.textContent = message;
-  console.error('[renderer-error]', message);
-}
-
-function getWebviewUrl(webview) {
-  if (!webview) return '';
-  try {
-    if (typeof webview.getURL === 'function') {
-      const url = webview.getURL();
-      if (url) return url;
-    }
-  } catch (_err) {
-    // webview 尚未 dom-ready 时 getURL 可能抛错
-  }
-  return webview.getAttribute('src') || webview.src || '';
-}
-
-function configureWebview(webview) {
-  webview.partition = 'persist:main';
-  webview.setAttribute('allowpopups', '');
-  webview.setAttribute(
-    'webpreferences',
-    'contextIsolation=yes,nodeIntegration=no,sandbox=no,webSecurity=yes'
-  );
-}
-
-function isValidBookmarkUrl(url) {
-  return url && url !== DEFAULT_HOME && !url.startsWith('about:') && /^https?:\/\//i.test(url);
-}
-
-function loadBookmarks() {
-  try {
-    const raw = localStorage.getItem(BOOKMARKS_KEY);
-    bookmarks = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(bookmarks)) bookmarks = [];
-  } catch (_err) {
-    bookmarks = [];
-  }
-}
-
-function saveBookmarks() {
-  try {
-    localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
-  } catch (_err) {
-    // localStorage 不可用时忽略
-  }
-}
-
-function getCurrentPageInfo() {
-  const webview = getActiveWebview();
-  if (!webview) return null;
-
-  const url = getWebviewUrl(webview);
-  if (!isValidBookmarkUrl(url)) return null;
-
-  const tab = getActiveTab();
-  const title = (tab && tab.titleEl && tab.titleEl.textContent.trim()) || url;
-  return { url, title };
-}
-
-function isCurrentPageBookmarked() {
-  const info = getCurrentPageInfo();
-  if (!info) return false;
-  return bookmarks.some((item) => item.url === info.url);
-}
-
-function updateBookmarkButton() {
-  if (!btnBookmark) return;
-  try {
-    const bookmarked = isCurrentPageBookmarked();
-    btnBookmark.textContent = bookmarked ? '★' : '☆';
-    btnBookmark.classList.toggle('active', bookmarked);
-    btnBookmark.title = bookmarked ? '取消存入标签' : '存入标签';
-  } catch (_err) {
-    btnBookmark.textContent = '☆';
-    btnBookmark.classList.remove('active');
-  }
-}
-
-function renderBookmarks() {
-  if (!bookmarkListEl) return;
-  bookmarkListEl.innerHTML = '';
-
-  if (bookmarks.length === 0) {
-    const empty = document.createElement('span');
-    empty.className = 'bookmark-empty';
-    empty.textContent = '点击地址栏右侧 ☆ 保存当前网页';
-    bookmarkListEl.appendChild(empty);
-    return;
-  }
-
-  bookmarks.forEach((item) => {
-    const chip = document.createElement('div');
-    chip.className = 'bookmark-item';
-    chip.title = item.url;
-
-    const titleEl = document.createElement('span');
-    titleEl.className = 'bookmark-item-title';
-    titleEl.textContent = item.title || item.url;
-
-    const removeBtn = document.createElement('button');
-    removeBtn.className = 'bookmark-item-remove';
-    removeBtn.textContent = '×';
-    removeBtn.title = '删除标签';
-
-    chip.addEventListener('click', () => {
-      navigateActive(item.url);
-    });
-
-    removeBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      bookmarks = bookmarks.filter((b) => b.url !== item.url);
-      saveBookmarks();
-      renderBookmarks();
-      updateBookmarkButton();
-    });
-
-    chip.appendChild(titleEl);
-    chip.appendChild(removeBtn);
-    bookmarkListEl.appendChild(chip);
-  });
-}
-
-function toggleBookmark() {
-  const info = getCurrentPageInfo();
-  if (!info) {
-    setStatus('请先打开一个有效网页再存入标签');
-    addLog('当前页面无法存入标签', 'warn');
-    return;
-  }
-
-  const existingIndex = bookmarks.findIndex((item) => item.url === info.url);
-  if (existingIndex >= 0) {
-    bookmarks.splice(existingIndex, 1);
-    addLog(`已取消标签：${info.title}`, 'warn');
-  } else {
-    bookmarks.unshift({ url: info.url, title: info.title, addedAt: Date.now() });
-    addLog(`已存入标签：${info.title}`, 'ok');
-  }
-
-  saveBookmarks();
-  renderBookmarks();
-  updateBookmarkButton();
-}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -284,6 +135,131 @@ function addLog(message, type = 'ok') {
   while (logPanel.children.length > 50) {
     logPanel.removeChild(logPanel.lastChild);
   }
+}
+
+function safeParseBookmarks(raw) {
+  if (!raw) return [];
+  const parsed = JSON.parse(raw);
+  if (!Array.isArray(parsed)) return [];
+  return parsed
+    .filter((item) => item && typeof item.url === 'string')
+    .map((item) => ({
+      url: item.url,
+      title: typeof item.title === 'string' && item.title.trim() ? item.title.trim() : item.url
+    }))
+    .filter((item, index, list) => /^https?:\/\//i.test(item.url) && list.findIndex((saved) => saved.url === item.url) === index)
+    .slice(0, MAX_BOOKMARKS);
+}
+
+function loadBookmarks() {
+  try {
+    return safeParseBookmarks(localStorage.getItem(BOOKMARK_STORAGE_KEY));
+  } catch (_err) {
+    try {
+      localStorage.removeItem(BOOKMARK_STORAGE_KEY);
+    } catch (_storageErr) {
+      // 本地存储异常时保持空收藏，避免启动白屏
+    }
+    return [];
+  }
+}
+
+function saveBookmarks() {
+  try {
+    localStorage.setItem(BOOKMARK_STORAGE_KEY, JSON.stringify(bookmarks));
+  } catch (_err) {
+    addLog('收藏保存失败：本地存储不可用', 'warn');
+  }
+}
+
+function getActivePageInfo() {
+  const tab = getActiveTab();
+  const webview = getActiveWebview();
+  if (!tab || !webview) return null;
+  const url = webview.getURL();
+  if (!url || url === DEFAULT_HOME || url.startsWith('about:')) return null;
+  const title = (tab.titleEl.textContent || '').trim();
+  return {
+    url,
+    title: title && title !== '新标签页' ? title : url
+  };
+}
+
+function updateBookmarkButton() {
+  const pageInfo = getActivePageInfo();
+  const isBookmarked = pageInfo ? bookmarks.some((item) => item.url === pageInfo.url) : false;
+  btnBookmark.textContent = isBookmarked ? '★' : '☆';
+  btnBookmark.title = isBookmarked ? '已收藏当前网页' : '收藏当前网页';
+}
+
+function renderBookmarks() {
+  bookmarkBarEl.replaceChildren();
+
+  bookmarks.forEach((bookmark) => {
+    const itemEl = document.createElement('div');
+    itemEl.className = 'bookmark-item';
+    itemEl.role = 'button';
+    itemEl.tabIndex = 0;
+    itemEl.title = bookmark.url;
+
+    const titleEl = document.createElement('span');
+    titleEl.className = 'bookmark-title';
+    titleEl.textContent = bookmark.title;
+
+    const removeEl = document.createElement('button');
+    removeEl.className = 'bookmark-remove';
+    removeEl.type = 'button';
+    removeEl.title = '删除这个收藏';
+    removeEl.textContent = '×';
+
+    itemEl.appendChild(titleEl);
+    itemEl.appendChild(removeEl);
+
+    itemEl.addEventListener('click', () => {
+      navigateActive(bookmark.url);
+    });
+
+    itemEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        navigateActive(bookmark.url);
+      }
+    });
+
+    removeEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      bookmarks = bookmarks.filter((item) => item.url !== bookmark.url);
+      saveBookmarks();
+      renderBookmarks();
+      addLog(`已删除收藏：${bookmark.title}`, 'warn');
+    });
+
+    bookmarkBarEl.appendChild(itemEl);
+  });
+
+  updateBookmarkButton();
+}
+
+function addCurrentPageBookmark() {
+  const pageInfo = getActivePageInfo();
+  if (!pageInfo) {
+    addLog('当前页面不能收藏，请先打开一个网页', 'warn');
+    setStatus('请先打开一个网页后再收藏');
+    return;
+  }
+
+  const existing = bookmarks.find((item) => item.url === pageInfo.url);
+  if (existing) {
+    existing.title = pageInfo.title;
+    addLog(`已更新收藏：${pageInfo.title}`, 'ok');
+  } else {
+    bookmarks.unshift(pageInfo);
+    bookmarks = bookmarks.slice(0, MAX_BOOKMARKS);
+    addLog(`已收藏：${pageInfo.title}`, 'ok');
+  }
+
+  saveBookmarks();
+  renderBookmarks();
 }
 
 function getActiveTab() {
@@ -327,8 +303,9 @@ function createTab(url = DEFAULT_HOME) {
   tabsEl.appendChild(tabEl);
 
   const webview = document.createElement('webview');
-  configureWebview(webview);
   webview.src = url;
+  webview.partition = 'persist:main';
+  webview.setAttribute('allowpopups', '');
   webview.classList.add('active');
   webviewContainer.appendChild(webview);
 
@@ -362,25 +339,15 @@ function bindWebviewEvents(tab) {
   webview.addEventListener('did-stop-loading', () => {
     if (tab.id === activeTabId) {
       updateNavButtons();
-      updateBookmarkButton();
       if (!autoCheckRunning) {
-        setStatus('就绪。登录后点击「开始自动勾选」（登录状态会自动保留）');
+        setStatus('就绪。登录后点击「开始自动勾选」');
       }
     }
   });
 
   webview.addEventListener('page-title-updated', (e) => {
     tab.titleEl.textContent = e.title || '新标签页';
-    const url = getWebviewUrl(webview);
-    const bookmark = bookmarks.find((item) => item.url === url);
-    if (bookmark && e.title) {
-      bookmark.title = e.title;
-      saveBookmarks();
-      renderBookmarks();
-    }
-    if (tab.id === activeTabId) {
-      updateBookmarkButton();
-    }
+    updateBookmarkButton();
   });
 
   webview.addEventListener('did-navigate', (e) => {
@@ -425,11 +392,11 @@ function switchTab(id) {
   const tab = tabs.get(id);
   urlInput.value = tab.url === DEFAULT_HOME ? '' : tab.url;
   updateNavButtons();
+  updateBookmarkButton();
 
   if (!autoCheckRunning) {
-    setStatus('就绪。登录后点击「开始自动勾选」（登录状态会自动保留）');
+    setStatus('就绪。登录后点击「开始自动勾选」');
   }
-  updateBookmarkButton();
 }
 
 function closeTab(id) {
@@ -520,7 +487,7 @@ async function runAutoCheck() {
     return;
   }
 
-  const currentUrl = getWebviewUrl(webview);
+  const currentUrl = webview.getURL();
   if (!currentUrl || currentUrl === DEFAULT_HOME || currentUrl.startsWith('about:')) {
     setStatus('请先在地址栏输入网址并打开网页');
     addLog('请先输入网址', 'warn');
@@ -598,59 +565,33 @@ function stopAutoCheck() {
   setStatus('正在停止…');
 }
 
-function bindUiEvents() {
-  btnNewTab.addEventListener('click', () => createTab());
-  btnGo.addEventListener('click', () => navigateActive(urlInput.value));
-  urlInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') navigateActive(urlInput.value);
-  });
-  btnBack.addEventListener('click', () => {
-    const webview = getActiveWebview();
-    if (webview && webview.canGoBack()) webview.goBack();
-  });
-  btnForward.addEventListener('click', () => {
-    const webview = getActiveWebview();
-    if (webview && webview.canGoForward()) webview.goForward();
-  });
-  btnReload.addEventListener('click', () => {
-    const webview = getActiveWebview();
-    if (webview) webview.reload();
-  });
-  btnStart.addEventListener('click', runAutoCheck);
-  btnStop.addEventListener('click', stopAutoCheck);
-  if (btnBookmark) {
-    btnBookmark.addEventListener('click', toggleBookmark);
-  }
-}
+btnNewTab.addEventListener('click', () => createTab());
 
-function bootstrapApp() {
-  if (!tabsEl || !webviewContainer || !urlInput) {
-    showBootError('界面元素加载失败，请重新安装软件或联系技术支持。');
-    return;
-  }
+btnGo.addEventListener('click', () => navigateActive(urlInput.value));
+btnBookmark.addEventListener('click', addCurrentPageBookmark);
 
-  try {
-    bindUiEvents();
-    loadBookmarks();
-    renderBookmarks();
-    createTab();
-    updateBookmarkButton();
-  } catch (err) {
-    showBootError(`界面初始化失败：${err.message}\n\n请尝试在终端运行 auto-checkbox-browser 查看详细报错。`);
-  }
-}
-
-window.addEventListener('error', (event) => {
-  showBootError(`脚本运行错误：${event.message}\n${event.filename || ''}:${event.lineno || ''}`);
+urlInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') navigateActive(urlInput.value);
 });
 
-window.addEventListener('unhandledrejection', (event) => {
-  const reason = event.reason && event.reason.message ? event.reason.message : String(event.reason);
-  showBootError(`未处理的异步错误：${reason}`);
+btnBack.addEventListener('click', () => {
+  const webview = getActiveWebview();
+  if (webview && webview.canGoBack()) webview.goBack();
 });
 
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', bootstrapApp);
-} else {
-  bootstrapApp();
-}
+btnForward.addEventListener('click', () => {
+  const webview = getActiveWebview();
+  if (webview && webview.canGoForward()) webview.goForward();
+});
+
+btnReload.addEventListener('click', () => {
+  const webview = getActiveWebview();
+  if (webview) webview.reload();
+});
+
+btnStart.addEventListener('click', runAutoCheck);
+btnStop.addEventListener('click', stopAutoCheck);
+
+bookmarks = loadBookmarks();
+renderBookmarks();
+createTab();

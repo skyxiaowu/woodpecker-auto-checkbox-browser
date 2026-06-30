@@ -1,57 +1,15 @@
-const { app, BrowserWindow, ipcMain, webContents, nativeImage, Menu } = require('electron');
-const fs = require('fs');
+const { app, BrowserWindow, ipcMain, webContents, nativeImage } = require('electron');
 const path = require('path');
 
 let mainWindow;
 
-// 银河麒麟等 Linux 桌面：关闭沙箱与硬件加速，避免整窗白屏 / webview 无法渲染
-if (process.platform === 'linux') {
-  app.disableHardwareAcceleration();
-  app.commandLine.appendSwitch('no-sandbox');
-  app.commandLine.appendSwitch('disable-gpu-sandbox');
-  app.commandLine.appendSwitch('disable-gpu');
-}
+const iconPath = path.join(__dirname, 'woodpecker.png');
+const appIcon = nativeImage.createFromPath(iconPath);
+const appName = '啄木鸟自动勾选浏览器';
 
-function resolveIconPath() {
-  const candidates = [
-    path.join(__dirname, 'woodpecker.png'),
-    path.join(process.resourcesPath, 'woodpecker.png'),
-    path.join(__dirname, 'build', 'icons', '512x512.png'),
-    path.join(process.resourcesPath, 'icons', '512x512.png')
-  ];
-
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  return path.join(__dirname, 'woodpecker.png');
-}
-
-function loadAppIcon() {
-  const iconPath = resolveIconPath();
-  let icon = nativeImage.createFromPath(iconPath);
-
-  if (icon.isEmpty()) {
-    return { iconPath, icon: null };
-  }
-
-  if (process.platform === 'linux') {
-    icon = icon.resize({ width: 256, height: 256, quality: 'best' });
-  }
-
-  return { iconPath, icon };
-}
-
-function applyWindowIcon(win) {
-  const { icon } = loadAppIcon();
-  if (!icon || icon.isEmpty()) return;
-
-  if (process.platform === 'linux') {
-    app.setIcon(icon);
-  }
-  win.setIcon(icon);
+app.setName(appName);
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.autocheckbox.browser');
 }
 
 function getAllFrames(frame) {
@@ -87,57 +45,29 @@ ipcMain.handle('webview:execute-in-all-frames', async (_event, guestWebContentsI
 });
 
 function createWindow() {
-  Menu.setApplicationMenu(null);
-
-  const { iconPath, icon } = loadAppIcon();
-  const rendererHtml = path.join(__dirname, 'renderer', 'index.html');
-
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 860,
     minWidth: 900,
     minHeight: 600,
-    title: '啄木鸟自动勾选浏览器',
-    icon: icon && !icon.isEmpty() ? icon : iconPath,
-    autoHideMenuBar: true,
+    title: appName,
+    icon: appIcon.isEmpty() ? iconPath : appIcon,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      webviewTag: true,
-      sandbox: false
+      webviewTag: true
     }
   });
 
-  applyWindowIcon(mainWindow);
-  mainWindow.setMenu(null);
+  mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   mainWindow.setMenuBarVisibility(false);
-
-  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
-    console.error('界面加载失败:', errorCode, errorDescription, validatedURL);
-  });
-
-  mainWindow.webContents.on('render-process-gone', (_event, details) => {
-    console.error('渲染进程异常退出:', details);
-  });
-
-  mainWindow.webContents.on('console-message', (_event, _level, message) => {
-    if (message.includes('[renderer-error]')) {
-      console.error(message);
-    }
-  });
-
-  if (!fs.existsSync(rendererHtml)) {
-    console.error('找不到界面文件:', rendererHtml);
+  if (!appIcon.isEmpty()) {
+    mainWindow.setIcon(appIcon);
   }
-
-  mainWindow.loadFile(rendererHtml).catch((err) => {
-    console.error('loadFile 失败:', rendererHtml, err);
-  });
 }
 
 app.whenReady().then(() => {
-  Menu.setApplicationMenu(null);
   createWindow();
 
   app.on('activate', () => {

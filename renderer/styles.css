@@ -152,91 +152,64 @@ body {
 }
 
 .bookmark-btn {
-  font-size: 20px;
-  line-height: 1;
-  color: #888;
-}
-
-.bookmark-btn.active {
-  color: #f5a623;
+  color: #c28a00;
+  font-size: 18px;
 }
 
 .bookmark-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 8px;
-  background: #f5f7fa;
-  border-bottom: 1px solid #ddd;
-  flex-shrink: 0;
-  min-height: 32px;
-}
-
-.bookmark-label {
-  font-size: 12px;
-  color: #666;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.bookmark-list {
-  display: flex;
-  flex: 1;
   gap: 6px;
+  min-height: 34px;
+  padding: 4px 8px;
+  background: #fbfbfb;
+  border-bottom: 1px solid #ddd;
   overflow-x: auto;
-  align-items: center;
+  flex-shrink: 0;
+}
+
+.bookmark-bar:empty {
+  display: none;
 }
 
 .bookmark-item {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
   max-width: 220px;
   height: 26px;
-  padding: 0 8px 0 10px;
-  border: 1px solid #ccd6e0;
-  border-radius: 13px;
+  padding: 0 8px;
+  border: 1px solid #d8d8d8;
+  border-radius: 14px;
   background: #fff;
-  font-size: 12px;
   color: #333;
+  font-size: 12px;
+  white-space: nowrap;
   cursor: pointer;
   flex-shrink: 0;
-  user-select: none;
 }
 
 .bookmark-item:hover {
-  background: #e8f0fe;
-  border-color: #4a90d9;
+  background: #eef6ff;
+  border-color: #9cc7f2;
 }
 
-.bookmark-item-title {
+.bookmark-title {
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.bookmark-item-remove {
-  width: 16px;
-  height: 16px;
+.bookmark-remove {
+  margin-left: 6px;
   border: none;
   background: transparent;
-  color: #999;
-  font-size: 14px;
-  line-height: 14px;
+  color: #888;
   cursor: pointer;
-  border-radius: 50%;
-  flex-shrink: 0;
-  padding: 0;
+  font-size: 14px;
+  line-height: 1;
 }
 
-.bookmark-item-remove:hover {
-  background: #ddd;
-  color: #333;
-}
-
-.bookmark-empty {
-  font-size: 12px;
-  color: #aaa;
+.bookmark-remove:hover {
+  color: #c0392b;
 }
 
 /* 自动勾选工具栏 */
@@ -328,33 +301,15 @@ body {
   overflow: hidden;
 }
 
-/* Linux 下用 display:none 隐藏 webview 会导致无法渲染，改用 visibility + z-index */
 .webview-container webview {
   position: absolute;
   top: 0;
   left: 0;
   width: 100%;
   height: 100%;
-  visibility: hidden;
-  z-index: 0;
-  pointer-events: none;
+  display: none;
 }
 
 .webview-container webview.active {
-  visibility: visible;
-  z-index: 1;
-  pointer-events: auto;
-}
-
-.boot-error {
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  padding: 24px;
-  background: #fff3f3;
-  color: #c0392b;
-  font-size: 14px;
-  line-height: 1.6;
-  overflow: auto;
-  white-space: pre-wrap;
+  display: flex;
 }
