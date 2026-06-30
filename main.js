@@ -1,8 +1,14 @@
-const { app, BrowserWindow, ipcMain, webContents, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, webContents, nativeImage, Menu } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
 let mainWindow;
+
+// 银河麒麟等 Linux 桌面需关闭 Chromium 沙箱，否则可能出现白屏或 webview 无法加载
+if (process.platform === 'linux') {
+  app.commandLine.appendSwitch('no-sandbox');
+  app.commandLine.appendSwitch('disable-gpu-sandbox');
+}
 
 function resolveIconPath() {
   const candidates = [
@@ -79,7 +85,10 @@ ipcMain.handle('webview:execute-in-all-frames', async (_event, guestWebContentsI
 });
 
 function createWindow() {
+  Menu.setApplicationMenu(null);
+
   const { iconPath, icon } = loadAppIcon();
+  const rendererHtml = path.join(__dirname, 'renderer', 'index.html');
 
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -88,20 +97,31 @@ function createWindow() {
     minHeight: 600,
     title: '啄木鸟自动勾选浏览器',
     icon: icon && !icon.isEmpty() ? icon : iconPath,
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      webviewTag: true
+      webviewTag: true,
+      sandbox: false
     }
   });
 
   applyWindowIcon(mainWindow);
-  mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  mainWindow.setMenu(null);
   mainWindow.setMenuBarVisibility(false);
+
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    console.error('界面加载失败:', errorCode, errorDescription, validatedURL);
+  });
+
+  mainWindow.loadFile(rendererHtml).catch((err) => {
+    console.error('loadFile 失败:', rendererHtml, err);
+  });
 }
 
 app.whenReady().then(() => {
+  Menu.setApplicationMenu(null);
   createWindow();
 
   app.on('activate', () => {

@@ -1,6 +1,6 @@
 {
   "name": "auto-checkbox-browser",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "啄木鸟自动勾选浏览器，带自动勾选功能的简易浏览器，适用于银河麒麟 V10",
   "main": "main.js",
   "scripts": {
@@ -26,9 +26,11 @@
       "buildResources": "build"
     },
     "files": [
-      "**/*",
-      "!scripts/**",
+      "main.js",
+      "preload.js",
       "woodpecker.png",
+      "package.json",
+      "renderer/**/*",
       "build/icons/**"
     ],
     "extraResources": [
@@ -37,6 +39,7 @@
     ],
     "linux": {
       "icon": "build/icons",
+      "executableName": "auto-checkbox-browser",
       "target": ["deb"],
       "category": "Network",
       "maintainer": "user@local",
