@@ -108,6 +108,159 @@ body {
   background: #ccc;
 }
 
+.tab-bar-width-wrap {
+  position: relative;
+  flex-shrink: 0;
+  margin: 0 4px 0 6px;
+}
+
+.tab-width-btn {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #f8f8f8;
+  font-size: 12px;
+  color: #555;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tab-width-btn:hover {
+  background: #fff;
+  border-color: #bbb;
+}
+
+.tab-width-btn.is-open {
+  background: #fff;
+  border-color: #4a90d9;
+  color: #333;
+}
+
+.page-width-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  width: 260px;
+  padding: 10px 12px 12px;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+  z-index: 100;
+}
+
+.page-width-panel.is-hidden {
+  display: none;
+}
+
+.page-width-value {
+  font-size: 12px;
+  color: #666;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.width-slider-wrap {
+  position: relative;
+  height: 36px;
+  margin-top: 8px;
+}
+
+.width-ticks {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 16px;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.width-tick {
+  position: absolute;
+  top: 50%;
+  width: 1px;
+  transform: translate(-50%, -50%);
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.width-tick.major {
+  height: 12px;
+  background: rgba(0, 0, 0, 0.26);
+}
+
+.width-tick.minor {
+  height: 6px;
+}
+
+.width-crosshair {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  width: 1px;
+  transform: translateX(-50%);
+  background: rgba(74, 144, 217, 0.75);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.width-crosshair::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 11px;
+  height: 1px;
+  transform: translate(-50%, -50%);
+  background: rgba(74, 144, 217, 0.75);
+}
+
+.width-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  position: relative;
+  z-index: 3;
+  width: 100%;
+  height: 36px;
+  margin: 0;
+  background: transparent;
+  cursor: ew-resize;
+}
+
+.width-slider:focus {
+  outline: none;
+}
+
+.width-slider::-webkit-slider-runnable-track {
+  height: 1px;
+  background: rgba(0, 0, 0, 0.08);
+  border: none;
+}
+
+.width-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -7px;
+  opacity: 0;
+  cursor: ew-resize;
+}
+
+.width-slider::-moz-range-track {
+  height: 1px;
+  background: rgba(0, 0, 0, 0.08);
+  border: none;
+}
+
+.width-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: none;
+  opacity: 0;
+  cursor: ew-resize;
+}
+
 /* 地址栏 */
 .nav-bar {
   display: flex;
@@ -311,27 +464,38 @@ body {
   flex: 1;
   min-width: 0;
   min-height: 0;
-  position: relative;
   background: #fff;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* 外层 frame 撑开滚动区域，内层 webview 填满 frame */
+.webview-frame {
+  display: inline-block;
+  flex-shrink: 0;
+  vertical-align: top;
   overflow: hidden;
 }
 
-/* 勿用 display:none 隐藏 webview，Linux 下会导致页面尺寸错乱 */
-.webview-container webview {
+.webview-frame:not(.active) {
   position: absolute;
   top: 0;
   left: 0;
-  display: inline-flex;
-  flex: 0 1;
-  width: 0;
-  height: 0;
-  border: none;
-  overflow: hidden;
+  width: 0 !important;
+  height: 0 !important;
   visibility: hidden;
   pointer-events: none;
+  overflow: hidden;
 }
 
-.webview-container webview.active {
+.webview-frame.active {
   visibility: visible;
   pointer-events: auto;
+}
+
+.webview-frame webview {
+  display: inline-flex;
+  width: 100% !important;
+  height: 100% !important;
+  border: none;
 }

@@ -12,6 +12,18 @@
     <div class="tab-bar">
       <div id="tabs" class="tabs"></div>
       <button id="btn-new-tab" class="tab-add" title="新建标签">+</button>
+      <div class="tab-bar-width-wrap">
+        <button id="btn-page-width" class="tab-width-btn" type="button" title="调节页面宽度与缩放">宽度</button>
+        <div id="page-width-panel" class="page-width-panel is-hidden">
+          <div id="page-width-value" class="page-width-value">1280px · 100%</div>
+          <div class="width-slider-wrap">
+            <div id="ruler-ticks" class="width-ticks"></div>
+            <div id="width-crosshair" class="width-crosshair"></div>
+            <input id="page-width-slider" class="width-slider" type="range"
+              min="800" max="3840" step="50" value="1280">
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- 地址栏（与一般浏览器位置相同） -->

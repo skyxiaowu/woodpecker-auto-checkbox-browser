@@ -57,6 +57,29 @@ ipcMain.handle('webview:execute-in-all-frames', async (_event, guestWebContentsI
   return results;
 });
 
+ipcMain.handle('webview:set-size', async (_event, guestWebContentsId, width, height) => {
+  const wc = webContents.fromId(guestWebContentsId);
+  if (!wc || wc.isDestroyed()) {
+    return false;
+  }
+
+  wc.setSize({
+    width: Math.max(1, Math.round(width)),
+    height: Math.max(1, Math.round(height))
+  });
+  return true;
+});
+
+ipcMain.handle('webview:set-zoom', async (_event, guestWebContentsId, factor) => {
+  const wc = webContents.fromId(guestWebContentsId);
+  if (!wc || wc.isDestroyed()) {
+    return false;
+  }
+
+  wc.setZoomFactor(Math.max(0.25, Math.min(4, factor)));
+  return true;
+});
+
 function createWindow() {
   const iconPath = resolveIconPath();
   const appIcon = nativeImage.createFromPath(iconPath);

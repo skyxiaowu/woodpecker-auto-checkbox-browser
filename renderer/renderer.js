@@ -81,6 +81,62 @@ const PAGE_STATE_SCRIPT = `(() => {
   return state;
 })()`;
 
+const PAGE_DIMENSIONS_SCRIPT = `(() => {
+  function measureDocument(doc, size) {
+    if (!doc) return;
+    const root = doc.documentElement;
+    const body = doc.body;
+    size.width = Math.max(
+      size.width,
+      root?.scrollWidth || 0,
+      root?.offsetWidth || 0,
+      body?.scrollWidth || 0,
+      body?.offsetWidth || 0
+    );
+    size.height = Math.max(
+      size.height,
+      root?.scrollHeight || 0,
+      root?.offsetHeight || 0,
+      body?.scrollHeight || 0,
+      body?.offsetHeight || 0
+    );
+
+    for (const sel of ['.datagrid-view', '.datagrid-view2', '.panel-body', 'table', '.layout-panel']) {
+      doc.querySelectorAll(sel).forEach((el) => {
+        size.width = Math.max(size.width, el.scrollWidth || 0, el.offsetWidth || 0);
+        size.height = Math.max(size.height, el.scrollHeight || 0, el.offsetHeight || 0);
+      });
+    }
+
+    doc.querySelectorAll('iframe, frame, object, embed').forEach((frameEl) => {
+      try {
+        const innerDoc = frameEl.contentDocument
+          || frameEl.contentWindow?.document
+          || frameEl.getSVGDocument?.();
+        measureDocument(innerDoc, size);
+      } catch (_err) {
+        // 跨域子页面无法直接访问
+      }
+    });
+  }
+
+  const size = { width: 0, height: 0 };
+  measureDocument(document, size);
+  return size;
+})()`;
+
+const ENABLE_PAGE_SCROLL_SCRIPT = `(() => {
+  if (document.documentElement.dataset.zmnScrollFix === '1') return true;
+  document.documentElement.dataset.zmnScrollFix = '1';
+  const style = document.createElement('style');
+  style.textContent = [
+    'html, body { overflow: auto !important; }',
+    'body { min-width: min-content; }'
+  ].join('\\n');
+  (document.head || document.documentElement).appendChild(style);
+  return true;
+})()`;
+
 const CLICK_NEXT_SCRIPT = `(() => {
   const tags = ['a', 'button', 'span', 'div', 'li', 'input[type="button"]', '[role="button"]'];
 
@@ -165,7 +221,15 @@ const PAGE_READY_STABLE_POLLS = 3;
 const PAGE_READY_TIMEOUT_MS = 30000;
 const MAX_PAGES = 500;
 const BOOKMARK_STORAGE_KEY = 'zhuomuniao.bookmarks.v1';
+const PAGE_WIDTH_STORAGE_KEY = 'zhuomuniao.pageWidth.v1';
+const PAGE_WIDTH_MIN = 800;
+const PAGE_WIDTH_MAX = 3840;
+const PAGE_WIDTH_STEP = 50;
+const PAGE_WIDTH_BASE = 1280;
+const PAGE_ZOOM_MIN = 0.25;
+const PAGE_ZOOM_MAX = 4;
 const MAX_BOOKMARKS = 80;
+const CONTENT_SIZE_DELAYS_MS = [300, 1000, 2500];
 
 let tabIdCounter = 0;
 let activeTabId = null;
@@ -177,25 +241,321 @@ let autoCheckAbort = false;
 
 const tabsEl = document.getElementById('tabs');
 const webviewContainer = document.getElementById('webview-container');
+const pageWidthSlider = document.getElementById('page-width-slider');
+const pageWidthValue = document.getElementById('page-width-value');
+const pageWidthPanel = document.getElementById('page-width-panel');
+const btnPageWidth = document.getElementById('btn-page-width');
+const rulerTicksEl = document.getElementById('ruler-ticks');
+const widthCrosshair = document.getElementById('width-crosshair');
+
+function updateCrosshairPosition() {
+  if (!widthCrosshair || !pageWidthSlider) return;
+  const min = Number(pageWidthSlider.min) || PAGE_WIDTH_MIN;
+  const max = Number(pageWidthSlider.max) || PAGE_WIDTH_MAX;
+  const value = Number(pageWidthSlider.value);
+  const percent = max > min ? ((value - min) / (max - min)) * 100 : 0;
+  widthCrosshair.style.left = `${percent}%`;
+}
+
+function buildApplyPageLayoutScript(width) {
+  return `(() => {
+    const targetWidth = ${Math.max(1, Math.round(width))};
+    let meta = document.querySelector('meta[name="viewport"]');
+    if (!meta) {
+      meta = document.createElement('meta');
+      meta.name = 'viewport';
+      (document.head || document.documentElement).appendChild(meta);
+    }
+    meta.content = 'width=' + targetWidth + ', initial-scale=1';
+    window.dispatchEvent(new Event('resize'));
+    return window.innerWidth;
+  })()`;
+}
+
+function getViewportSize() {
+  if (!webviewContainer) return { width: 0, height: 0 };
+  const rect = webviewContainer.getBoundingClientRect();
+  return {
+    width: Math.max(0, Math.round(rect.width)),
+    height: Math.max(0, Math.round(rect.height))
+  };
+}
+
+function getManualPageWidth() {
+  if (!pageWidthSlider) return PAGE_WIDTH_MIN;
+  const value = Number.parseInt(pageWidthSlider.value, 10);
+  if (!Number.isFinite(value)) return PAGE_WIDTH_MIN;
+  return Math.max(PAGE_WIDTH_MIN, value);
+}
+
+function updatePageWidthLabel() {
+  if (pageWidthValue) {
+    const width = getManualPageWidth();
+    const tab = activeTabId != null ? tabs.get(activeTabId) : null;
+    const zoom = tab ? getPageZoomFactor(tab) : width / PAGE_WIDTH_BASE;
+    pageWidthValue.textContent = `${width}px · ${Math.round(zoom * 100)}%`;
+  }
+  updateCrosshairPosition();
+}
+
+function renderRulerTicks() {
+  if (!rulerTicksEl || !pageWidthSlider) return;
+
+  const min = Number(pageWidthSlider.min) || PAGE_WIDTH_MIN;
+  const max = Number(pageWidthSlider.max) || PAGE_WIDTH_MAX;
+  const step = Number(pageWidthSlider.step) || PAGE_WIDTH_STEP;
+
+  rulerTicksEl.innerHTML = '';
+  for (let value = min; value <= max; value += step) {
+    const tick = document.createElement('span');
+    const isMajor = value % 400 === 0 || value === min || value === max;
+    tick.className = `width-tick ${isMajor ? 'major' : 'minor'}`;
+    tick.style.left = `${((value - min) / (max - min)) * 100}%`;
+    rulerTicksEl.appendChild(tick);
+  }
+
+  updateCrosshairPosition();
+}
+
+function loadPageWidthMode() {
+  if (!pageWidthSlider) return;
+  try {
+    const saved = localStorage.getItem(PAGE_WIDTH_STORAGE_KEY);
+    if (saved) {
+      const value = Number.parseInt(saved, 10);
+      if (Number.isFinite(value) && value >= PAGE_WIDTH_MIN) {
+        pageWidthSlider.value = String(Math.min(value, Number(pageWidthSlider.max) || PAGE_WIDTH_MAX));
+      }
+    }
+  } catch (_err) {
+    // 忽略本地存储不可用
+  }
+  updatePageWidthLabel();
+}
+
+function savePageWidthMode() {
+  if (!pageWidthSlider) return;
+  try {
+    localStorage.setItem(PAGE_WIDTH_STORAGE_KEY, String(getManualPageWidth()));
+  } catch (_err) {
+    // 忽略本地存储不可用
+  }
+}
+
+function initPageWidthSlider() {
+  if (!pageWidthSlider) return;
+
+  pageWidthSlider.min = String(PAGE_WIDTH_MIN);
+  pageWidthSlider.max = String(PAGE_WIDTH_MAX);
+  pageWidthSlider.step = String(PAGE_WIDTH_STEP);
+
+  loadPageWidthMode();
+
+  try {
+    if (!localStorage.getItem(PAGE_WIDTH_STORAGE_KEY)) {
+      const viewport = getViewportSize();
+      if (viewport.width >= PAGE_WIDTH_MIN) {
+        pageWidthSlider.value = String(Math.max(PAGE_WIDTH_MIN, viewport.width));
+      }
+    }
+  } catch (_err) {
+    // 忽略本地存储不可用
+  }
+
+  updatePageWidthLabel();
+  renderRulerTicks();
+}
+
+function getPageZoomFactor(tab) {
+  const target = getManualPageWidth();
+  const base = tab?.naturalWidth || PAGE_WIDTH_BASE;
+  const zoom = target / base;
+  return Math.max(PAGE_ZOOM_MIN, Math.min(PAGE_ZOOM_MAX, zoom));
+}
+
+function applyPageZoom(tab, zoom) {
+  if (!tab?.webview) return;
+
+  const factor = Math.max(PAGE_ZOOM_MIN, Math.min(PAGE_ZOOM_MAX, zoom));
+  try {
+    if (typeof tab.webview.setZoomFactor === 'function') {
+      tab.webview.setZoomFactor(factor);
+      return;
+    }
+  } catch (_err) {
+    // 回退到主进程设置
+  }
+
+  const guestId = getWebviewGuestId(tab.webview);
+  if (guestId && window.electronAPI?.setWebviewZoom) {
+    window.electronAPI.setWebviewZoom(guestId, factor).catch(() => {});
+  }
+}
+
+async function applyPageLayoutWidth(tab, width) {
+  if (!tab?.webview) return;
+  try {
+    await executeInAllFrames(tab.webview, buildApplyPageLayoutScript(width));
+  } catch (_err) {
+    // 忽略注入失败
+  }
+}
+
+function applyPageDisplaySettings(tab) {
+  if (!tab?.webview || tab.id !== activeTabId) return;
+
+  const zoom = getPageZoomFactor(tab);
+  const width = getManualPageWidth();
+  applyPageZoom(tab, zoom);
+  applyPageLayoutWidth(tab, width);
+  updatePageWidthLabel();
+}
+
+function togglePageWidthPanel(forceOpen) {
+  if (!pageWidthPanel || !btnPageWidth) return;
+
+  const shouldOpen = typeof forceOpen === 'boolean'
+    ? forceOpen
+    : pageWidthPanel.classList.contains('is-hidden');
+
+  pageWidthPanel.classList.toggle('is-hidden', !shouldOpen);
+  btnPageWidth.classList.toggle('is-open', shouldOpen);
+}
+
+function initPageWidthPanel() {
+  if (!pageWidthSlider) return;
+
+  initPageWidthSlider();
+
+  if (btnPageWidth) {
+    btnPageWidth.addEventListener('click', (e) => {
+      e.stopPropagation();
+      togglePageWidthPanel();
+    });
+  }
+
+  pageWidthSlider.addEventListener('input', () => {
+    updatePageWidthLabel();
+    layoutWebviews();
+    const tab = activeTabId != null ? tabs.get(activeTabId) : null;
+    if (tab) applyPageDisplaySettings(tab);
+  });
+
+  pageWidthSlider.addEventListener('change', () => {
+    savePageWidthMode();
+    layoutWebviews();
+    const tab = activeTabId != null ? tabs.get(activeTabId) : null;
+    if (tab) applyPageDisplaySettings(tab);
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!pageWidthPanel || pageWidthPanel.classList.contains('is-hidden')) return;
+    if (pageWidthPanel.contains(e.target) || btnPageWidth?.contains(e.target)) return;
+    togglePageWidthPanel(false);
+  });
+}
+
+function maybeExtendPageWidthMax(detectedWidth) {
+  if (!pageWidthSlider || !detectedWidth || detectedWidth <= PAGE_WIDTH_MAX) return;
+  const nextMax = Math.min(Math.ceil(detectedWidth / PAGE_WIDTH_STEP) * PAGE_WIDTH_STEP, 6000);
+  if (nextMax > Number(pageWidthSlider.max)) {
+    pageWidthSlider.max = String(nextMax);
+    renderRulerTicks();
+  }
+}
+
+function syncWebviewGuestSize(webview, width, height) {
+  if (!webview || width <= 0 || height <= 0) return;
+
+  const guestId = getWebviewGuestId(webview);
+  if (guestId && window.electronAPI?.setWebviewSize) {
+    window.electronAPI.setWebviewSize(guestId, width, height).catch(() => {});
+  }
+}
 
 function layoutWebviews() {
   if (!webviewContainer) return;
 
-  const rect = webviewContainer.getBoundingClientRect();
-  const width = Math.max(0, Math.round(rect.width));
-  const height = Math.max(0, Math.round(rect.height));
+  const viewport = getViewportSize();
 
   tabs.forEach((tab) => {
-    const { webview } = tab;
-    if (tab.id === activeTabId && width > 0 && height > 0) {
-      webview.style.width = `${width}px`;
-      webview.style.height = `${height}px`;
+    const { webview, frame } = tab;
+    if (tab.id === activeTabId && viewport.width > 0 && viewport.height > 0) {
+      const zoom = getPageZoomFactor(tab);
+      const contentH = tab.contentHeight || viewport.height;
+      const frameHeight = Math.max(viewport.height, Math.round(contentH * zoom));
+
+      frame.style.width = `${viewport.width}px`;
+      frame.style.height = `${frameHeight}px`;
+
+      syncWebviewGuestSize(webview, viewport.width, frameHeight);
+      applyPageZoom(tab, zoom);
     } else {
-      webview.style.width = '0px';
-      webview.style.height = '0px';
+      frame.style.width = '0px';
+      frame.style.height = '0px';
     }
   });
+
+  updatePageWidthLabel();
 }
+
+async function updateTabContentSize(tab) {
+  if (!tab?.webview || tab.id !== activeTabId) return;
+
+  const url = tab.webview.getURL?.() || tab.url;
+  if (!url || url === DEFAULT_HOME) {
+    tab.contentHeight = 0;
+    layoutWebviews();
+    return;
+  }
+
+  try {
+    const results = await executeInAllFrames(tab.webview, PAGE_DIMENSIONS_SCRIPT);
+    let maxW = 0;
+    let maxH = 0;
+    for (const result of results) {
+      if (!result || typeof result !== 'object') continue;
+      maxW = Math.max(maxW, result.width || 0);
+      maxH = Math.max(maxH, result.height || 0);
+    }
+
+    const viewport = getViewportSize();
+    tab.contentHeight = maxH > 0 ? maxH : viewport.height;
+    if (maxW > 0) {
+      tab.naturalWidth = maxW;
+    } else if (!tab.naturalWidth) {
+      tab.naturalWidth = PAGE_WIDTH_BASE;
+    }
+    maybeExtendPageWidthMax(maxW);
+    layoutWebviews();
+    applyPageDisplaySettings(tab);
+  } catch (_err) {
+    layoutWebviews();
+  }
+}
+
+function scheduleContentSizeUpdate(tab) {
+  if (!tab) return;
+  const runId = ++tab.sizeRunId;
+  tab.sizeRunId = runId;
+
+  CONTENT_SIZE_DELAYS_MS.forEach((delay) => {
+    setTimeout(() => {
+      if (tab.sizeRunId !== runId || tab.id !== activeTabId) return;
+      updateTabContentSize(tab);
+    }, delay);
+  });
+}
+
+async function enablePageScroll(tab) {
+  if (!tab?.webview) return;
+  try {
+    await executeInAllFrames(tab.webview, ENABLE_PAGE_SCROLL_SCRIPT);
+  } catch (_err) {
+    // 忽略注入失败
+  }
+}
+
 const urlInput = document.getElementById('url-input');
 const statusText = document.getElementById('status-text');
 const logPanel = document.getElementById('log-panel');
@@ -401,14 +761,27 @@ function createTab(url = DEFAULT_HOME) {
   tabEl.appendChild(closeBtn);
   tabsEl.appendChild(tabEl);
 
+  const frame = document.createElement('div');
+  frame.className = 'webview-frame';
+
   const webview = document.createElement('webview');
   webview.src = url;
   webview.partition = 'persist:main';
   webview.setAttribute('allowpopups', '');
-  webview.setAttribute('autosize', 'on');
-  webviewContainer.appendChild(webview);
+  frame.appendChild(webview);
+  webviewContainer.appendChild(frame);
 
-  const tab = { id, tabEl, titleEl, webview, url };
+  const tab = {
+    id,
+    tabEl,
+    titleEl,
+    frame,
+    webview,
+    url,
+    contentHeight: 0,
+    naturalWidth: 0,
+    sizeRunId: 0
+  };
   tabs.set(id, tab);
 
   tabEl.addEventListener('click', (e) => {
@@ -430,9 +803,12 @@ function bindWebviewEvents(tab) {
   const { webview } = tab;
 
   webview.addEventListener('dom-ready', () => {
-    if (tab.id === activeTabId) {
-      layoutWebviews();
-    }
+    if (tab.id !== activeTabId) return;
+    enablePageScroll(tab);
+    layoutWebviews();
+    updateTabContentSize(tab);
+    scheduleContentSizeUpdate(tab);
+    applyPageDisplaySettings(tab);
   });
 
   webview.addEventListener('did-start-loading', () => {
@@ -442,12 +818,13 @@ function bindWebviewEvents(tab) {
   });
 
   webview.addEventListener('did-stop-loading', () => {
-    if (tab.id === activeTabId) {
-      layoutWebviews();
-      updateNavButtons();
-      if (!autoCheckRunning) {
-        setStatus('就绪。登录后点击「开始自动勾选」');
-      }
+    if (tab.id !== activeTabId) return;
+    layoutWebviews();
+    updateTabContentSize(tab);
+    scheduleContentSizeUpdate(tab);
+    updateNavButtons();
+    if (!autoCheckRunning) {
+      setStatus('就绪。点击标签栏「宽度」调节页面缩放，登录后点击「开始自动勾选」');
     }
   });
 
@@ -492,7 +869,7 @@ function switchTab(id) {
   tabs.forEach((tab, tabId) => {
     const isActive = tabId === id;
     tab.tabEl.classList.toggle('active', isActive);
-    tab.webview.classList.toggle('active', isActive);
+    tab.frame.classList.toggle('active', isActive);
   });
 
   const tab = tabs.get(id);
@@ -501,10 +878,20 @@ function switchTab(id) {
   updateBookmarkButton();
 
   if (!autoCheckRunning) {
-    setStatus('就绪。登录后点击「开始自动勾选」');
+    setStatus('就绪。点击标签栏「宽度」调节页面缩放，登录后点击「开始自动勾选」');
   }
 
-  requestAnimationFrame(layoutWebviews);
+  if (webviewContainer) {
+    webviewContainer.scrollTop = 0;
+    webviewContainer.scrollLeft = 0;
+  }
+
+  requestAnimationFrame(() => {
+    layoutWebviews();
+    updateTabContentSize(tab);
+    scheduleContentSizeUpdate(tab);
+    applyPageDisplaySettings(tab);
+  });
 }
 
 function closeTab(id) {
@@ -515,7 +902,7 @@ function closeTab(id) {
   }
 
   const tab = tabs.get(id);
-  tab.webview.remove();
+  tab.frame.remove();
   tab.tabEl.remove();
   tabs.delete(id);
 
@@ -789,6 +1176,8 @@ btnStop.addEventListener('click', stopAutoCheck);
 
 bookmarks = loadBookmarks();
 renderBookmarks();
+initPageWidthPanel();
+
 createTab();
 
 if (typeof ResizeObserver !== 'undefined') {
