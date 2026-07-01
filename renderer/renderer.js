@@ -35,6 +35,52 @@ const CHECK_ALL_SCRIPT = `(() => {
   return count;
 })()`;
 
+const PAGE_STATE_SCRIPT = `(() => {
+  function collectRoots(root) {
+    const roots = [root];
+    root.querySelectorAll('*').forEach((el) => {
+      if (el.shadowRoot) roots.push(el.shadowRoot);
+    });
+    return roots;
+  }
+
+  function isVisible(el) {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    return style.display !== 'none'
+      && style.visibility !== 'hidden'
+      && Number(style.opacity) > 0;
+  }
+
+  function scanDocument(doc, state) {
+    if (!doc) return;
+    for (const root of collectRoots(doc)) {
+      for (const mask of root.querySelectorAll(
+        '.datagrid-mask, .datagrid-mask-msg, .messager-progress, .pagination-loading'
+      )) {
+        if (isVisible(mask)) state.loading = true;
+      }
+      for (const cb of root.querySelectorAll('input[type="checkbox"]')) {
+        if (isVisible(cb)) state.count++;
+      }
+    }
+    doc.querySelectorAll('iframe, frame, object, embed').forEach((frameEl) => {
+      try {
+        const innerDoc = frameEl.contentDocument
+          || frameEl.contentWindow?.document
+          || frameEl.getSVGDocument?.();
+        scanDocument(innerDoc, state);
+      } catch (_err) {
+        // 跨域子页面无法直接访问
+      }
+    });
+  }
+
+  const state = { loading: false, count: 0 };
+  scanDocument(document, state);
+  return state;
+})()`;
+
 const CLICK_NEXT_SCRIPT = `(() => {
   const tags = ['a', 'button', 'span', 'div', 'li', 'input[type="button"]', '[role="button"]'];
 
@@ -46,23 +92,56 @@ const CLICK_NEXT_SCRIPT = `(() => {
     return roots;
   }
 
+  function isDisabled(el) {
+    if (!el) return true;
+    let node = el;
+    while (node && node !== document.documentElement) {
+      if (node.disabled) return true;
+      if (node.classList?.contains('disabled') || node.classList?.contains('l-btn-disabled')) return true;
+      if (node.getAttribute?.('aria-disabled') === 'true') return true;
+      node = node.parentElement;
+    }
+    const style = window.getComputedStyle(el);
+    return style.display === 'none'
+      || style.visibility === 'hidden'
+      || style.pointerEvents === 'none';
+  }
+
+  function findClickable(el) {
+    return el.closest('a, button, [role="button"]') || el;
+  }
+
+  function tryClickEasyUINext(root) {
+    for (const icon of root.querySelectorAll('.pagination-next, .l-btn-icon.pagination-next')) {
+      const btn = findClickable(icon);
+      if (!btn || isDisabled(btn)) continue;
+      btn.click();
+      return true;
+    }
+    return false;
+  }
+
+  function tryClickTextNext(root, seen) {
+    for (const tag of tags) {
+      for (const el of root.querySelectorAll(tag)) {
+        if (seen.has(el)) continue;
+        seen.add(el);
+        const text = (el.innerText || el.textContent || '').trim();
+        if (text !== '下一页') continue;
+        if (isDisabled(el)) continue;
+        el.click();
+        return true;
+      }
+    }
+    return false;
+  }
+
   function tryClickInDocument(doc) {
     if (!doc) return false;
     const seen = new Set();
     for (const root of collectRoots(doc)) {
-      for (const tag of tags) {
-        for (const el of root.querySelectorAll(tag)) {
-          if (seen.has(el)) continue;
-          seen.add(el);
-          const text = (el.innerText || el.textContent || '').trim();
-          if (text !== '下一页') continue;
-          const style = window.getComputedStyle(el);
-          if (style.display === 'none' || style.visibility === 'hidden') continue;
-          if (el.disabled || el.classList.contains('disabled') || el.getAttribute('aria-disabled') === 'true') continue;
-          el.click();
-          return true;
-        }
-      }
+      if (tryClickEasyUINext(root)) return true;
+      if (tryClickTextNext(root, seen)) return true;
     }
     for (const frameEl of doc.querySelectorAll('iframe, frame, object, embed')) {
       try {
@@ -81,8 +160,9 @@ const CLICK_NEXT_SCRIPT = `(() => {
 })()`;
 
 const DEFAULT_HOME = 'about:blank';
-const PAGE_WAIT_MS = 800;
-const AFTER_CLICK_MS = 1500;
+const PAGE_READY_POLL_MS = 200;
+const PAGE_READY_STABLE_POLLS = 3;
+const PAGE_READY_TIMEOUT_MS = 30000;
 const MAX_PAGES = 500;
 const BOOKMARK_STORAGE_KEY = 'zhuomuniao.bookmarks.v1';
 const MAX_BOOKMARKS = 80;
@@ -97,6 +177,25 @@ let autoCheckAbort = false;
 
 const tabsEl = document.getElementById('tabs');
 const webviewContainer = document.getElementById('webview-container');
+
+function layoutWebviews() {
+  if (!webviewContainer) return;
+
+  const rect = webviewContainer.getBoundingClientRect();
+  const width = Math.max(0, Math.round(rect.width));
+  const height = Math.max(0, Math.round(rect.height));
+
+  tabs.forEach((tab) => {
+    const { webview } = tab;
+    if (tab.id === activeTabId && width > 0 && height > 0) {
+      webview.style.width = `${width}px`;
+      webview.style.height = `${height}px`;
+    } else {
+      webview.style.width = '0px';
+      webview.style.height = '0px';
+    }
+  });
+}
 const urlInput = document.getElementById('url-input');
 const statusText = document.getElementById('status-text');
 const logPanel = document.getElementById('log-panel');
@@ -306,7 +405,7 @@ function createTab(url = DEFAULT_HOME) {
   webview.src = url;
   webview.partition = 'persist:main';
   webview.setAttribute('allowpopups', '');
-  webview.classList.add('active');
+  webview.setAttribute('autosize', 'on');
   webviewContainer.appendChild(webview);
 
   const tab = { id, tabEl, titleEl, webview, url };
@@ -330,6 +429,12 @@ function createTab(url = DEFAULT_HOME) {
 function bindWebviewEvents(tab) {
   const { webview } = tab;
 
+  webview.addEventListener('dom-ready', () => {
+    if (tab.id === activeTabId) {
+      layoutWebviews();
+    }
+  });
+
   webview.addEventListener('did-start-loading', () => {
     if (tab.id === activeTabId) {
       setStatus('页面加载中…');
@@ -338,6 +443,7 @@ function bindWebviewEvents(tab) {
 
   webview.addEventListener('did-stop-loading', () => {
     if (tab.id === activeTabId) {
+      layoutWebviews();
       updateNavButtons();
       if (!autoCheckRunning) {
         setStatus('就绪。登录后点击「开始自动勾选」');
@@ -397,6 +503,8 @@ function switchTab(id) {
   if (!autoCheckRunning) {
     setStatus('就绪。登录后点击「开始自动勾选」');
   }
+
+  requestAnimationFrame(layoutWebviews);
 }
 
 function closeTab(id) {
@@ -477,6 +585,70 @@ function hasTruthyFrameResult(results) {
   return results.some((value) => value === true);
 }
 
+function mergePageState(results) {
+  let loading = false;
+  let count = 0;
+  for (const value of results) {
+    if (!value || typeof value !== 'object') continue;
+    if (value.loading) loading = true;
+    count += typeof value.count === 'number' ? value.count : 0;
+  }
+  return { loading, count };
+}
+
+async function getPageCheckboxState(webview) {
+  const results = await executeInAllFrames(webview, PAGE_STATE_SCRIPT);
+  return mergePageState(results);
+}
+
+async function waitForPageReady(webview, prevCount = null) {
+  const start = Date.now();
+  let readyForStable = prevCount === null;
+  let sawLoading = false;
+  let sawCountChange = false;
+  let lastCount = -1;
+  let stableCount = 0;
+
+  while (!autoCheckAbort) {
+    if (Date.now() - start > PAGE_READY_TIMEOUT_MS) {
+      throw new Error('等待页面 checkbox 就绪超时');
+    }
+
+    const { loading, count } = await getPageCheckboxState(webview);
+
+    if (!readyForStable) {
+      if (loading) sawLoading = true;
+      if (count === 0 || count !== prevCount) sawCountChange = true;
+      if (sawLoading && !loading) readyForStable = true;
+      if (sawCountChange && !loading) readyForStable = true;
+      if (Date.now() - start > 3000 && !loading) readyForStable = true;
+      await sleep(PAGE_READY_POLL_MS);
+      continue;
+    }
+
+    if (loading) {
+      lastCount = -1;
+      stableCount = 0;
+      await sleep(PAGE_READY_POLL_MS);
+      continue;
+    }
+
+    if (count === lastCount) {
+      stableCount += 1;
+      if (stableCount >= PAGE_READY_STABLE_POLLS) {
+        return count;
+      }
+    } else {
+      lastCount = count;
+      stableCount = 1;
+    }
+
+    await sleep(PAGE_READY_POLL_MS);
+  }
+
+  return 0;
+}
+
 async function runAutoCheck() {
   if (autoCheckRunning) return;
 
@@ -503,11 +675,27 @@ async function runAutoCheck() {
   setStatus('自动勾选运行中…');
 
   let pageNum = 1;
+  let countBeforeNext = null;
 
   try {
     while (!autoCheckAbort && pageNum <= MAX_PAGES) {
       await waitForWebviewLoad(webview);
-      await sleep(PAGE_WAIT_MS);
+
+      if (autoCheckAbort) break;
+
+      let readyCount = 0;
+      try {
+        if (pageNum === 1) {
+          setStatus('等待第 1 页 checkbox 加载…');
+        } else {
+          setStatus(`等待第 ${pageNum} 页 checkbox 加载…`);
+        }
+        readyCount = await waitForPageReady(webview, countBeforeNext);
+      } catch (err) {
+        addLog(`第 ${pageNum} 页等待就绪失败：${err.message}`, 'err');
+        setStatus('等待页面就绪失败');
+        break;
+      }
 
       if (autoCheckAbort) break;
 
@@ -521,10 +709,18 @@ async function runAutoCheck() {
         break;
       }
 
-      addLog(`第 ${pageNum} 页：勾选 ${count} 个`, 'ok');
+      addLog(`第 ${pageNum} 页：勾选 ${count} 个（检测到 ${readyCount} 个 checkbox）`, 'ok');
       setStatus(`正在处理第 ${pageNum} 页，本页勾选 ${count} 个`);
 
       if (autoCheckAbort) break;
+
+      try {
+        const pageState = await getPageCheckboxState(webview);
+        countBeforeNext = pageState.count;
+      } catch (err) {
+        addLog(`读取第 ${pageNum} 页 checkbox 数量失败：${err.message}`, 'err');
+        break;
+      }
 
       let hasNext = false;
       try {
@@ -541,9 +737,8 @@ async function runAutoCheck() {
         break;
       }
 
-      addLog(`点击「下一页」，等待第 ${pageNum + 1} 页加载…`, 'ok');
+      addLog(`点击「下一页」，等待第 ${pageNum + 1} 页 checkbox 就绪…`, 'ok');
       pageNum++;
-      await sleep(AFTER_CLICK_MS);
     }
 
     if (pageNum > MAX_PAGES) {
@@ -595,3 +790,12 @@ btnStop.addEventListener('click', stopAutoCheck);
 bookmarks = loadBookmarks();
 renderBookmarks();
 createTab();
+
+if (typeof ResizeObserver !== 'undefined') {
+  const webviewResizeObserver = new ResizeObserver(() => {
+    layoutWebviews();
+  });
+  webviewResizeObserver.observe(webviewContainer);
+}
+
+window.addEventListener('resize', layoutWebviews);
