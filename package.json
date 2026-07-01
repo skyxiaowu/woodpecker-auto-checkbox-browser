@@ -1,6 +1,6 @@
 {
   "name": "auto-checkbox-browser",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "description": "啄木鸟自动勾选浏览器，带自动勾选功能的简易浏览器，适用于银河麒麟 V10",
   "main": "main.js",
   "scripts": {

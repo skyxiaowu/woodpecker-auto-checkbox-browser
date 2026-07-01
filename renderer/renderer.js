@@ -81,6 +81,69 @@ const PAGE_STATE_SCRIPT = `(() => {
   return state;
 })()`;
 
+const PAGE_SIGNATURE_SCRIPT = `(() => {
+  function collectRoots(root) {
+    const roots = [root];
+    root.querySelectorAll('*').forEach((el) => {
+      if (el.shadowRoot) roots.push(el.shadowRoot);
+    });
+    return roots;
+  }
+
+  function isVisible(el) {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    return style.display !== 'none'
+      && style.visibility !== 'hidden'
+      && Number(style.opacity) > 0;
+  }
+
+  function scanDocument(doc, state) {
+    if (!doc) return;
+    for (const root of collectRoots(doc)) {
+      for (const mask of root.querySelectorAll(
+        '.datagrid-mask, .datagrid-mask-msg, .messager-progress, .pagination-loading'
+      )) {
+        if (isVisible(mask)) state.loading = true;
+      }
+      for (const cb of root.querySelectorAll('input[type="checkbox"]')) {
+        if (!isVisible(cb)) continue;
+        state.checkboxCount++;
+        if (cb.checked) state.checkedCount++;
+      }
+      for (const el of root.querySelectorAll(
+        '.pagination-info, .pagination-num, .datagrid-view2 .datagrid-btable, table, tbody'
+      )) {
+        if (!isVisible(el)) continue;
+        const text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+        if (text) state.textParts.push(text.slice(0, 300));
+        if (state.textParts.length >= 4) break;
+      }
+    }
+
+    doc.querySelectorAll('iframe, frame, object, embed').forEach((frameEl) => {
+      try {
+        const innerDoc = frameEl.contentDocument
+          || frameEl.contentWindow?.document
+          || frameEl.getSVGDocument?.();
+        scanDocument(innerDoc, state);
+      } catch (_err) {
+        // 跨域子页面无法直接访问
+      }
+    });
+  }
+
+  const state = {
+    url: location.href,
+    loading: false,
+    checkboxCount: 0,
+    checkedCount: 0,
+    textParts: []
+  };
+  scanDocument(document, state);
+  return state;
+})()`;
+
 const PAGE_DIMENSIONS_SCRIPT = `(() => {
   function measureDocument(doc, size) {
     if (!doc) return;
@@ -219,15 +282,14 @@ const DEFAULT_HOME = 'about:blank';
 const PAGE_READY_POLL_MS = 200;
 const PAGE_READY_STABLE_POLLS = 3;
 const PAGE_READY_TIMEOUT_MS = 30000;
+const PAGE_ADVANCE_TIMEOUT_MS = 6000;
 const MAX_PAGES = 500;
 const BOOKMARK_STORAGE_KEY = 'zhuomuniao.bookmarks.v1';
-const PAGE_WIDTH_STORAGE_KEY = 'zhuomuniao.pageWidth.v1';
-const PAGE_WIDTH_MIN = 800;
-const PAGE_WIDTH_MAX = 3840;
-const PAGE_WIDTH_STEP = 50;
-const PAGE_WIDTH_BASE = 1280;
-const PAGE_ZOOM_MIN = 0.25;
-const PAGE_ZOOM_MAX = 4;
+const PAGE_ZOOM_STORAGE_KEY = 'zhuomuniao.pageZoom.v1';
+const PAGE_ZOOM_MIN = 50;
+const PAGE_ZOOM_MAX = 200;
+const PAGE_ZOOM_STEP = 5;
+const PAGE_ZOOM_DEFAULT = 100;
 const MAX_BOOKMARKS = 80;
 const CONTENT_SIZE_DELAYS_MS = [300, 1000, 2500];
 
@@ -245,31 +307,17 @@ const pageWidthSlider = document.getElementById('page-width-slider');
 const pageWidthValue = document.getElementById('page-width-value');
 const pageWidthPanel = document.getElementById('page-width-panel');
 const btnPageWidth = document.getElementById('btn-page-width');
+const btnZoomReset = document.getElementById('btn-zoom-reset');
 const rulerTicksEl = document.getElementById('ruler-ticks');
 const widthCrosshair = document.getElementById('width-crosshair');
 
 function updateCrosshairPosition() {
   if (!widthCrosshair || !pageWidthSlider) return;
-  const min = Number(pageWidthSlider.min) || PAGE_WIDTH_MIN;
-  const max = Number(pageWidthSlider.max) || PAGE_WIDTH_MAX;
+  const min = Number(pageWidthSlider.min) || PAGE_ZOOM_MIN;
+  const max = Number(pageWidthSlider.max) || PAGE_ZOOM_MAX;
   const value = Number(pageWidthSlider.value);
   const percent = max > min ? ((value - min) / (max - min)) * 100 : 0;
   widthCrosshair.style.left = `${percent}%`;
-}
-
-function buildApplyPageLayoutScript(width) {
-  return `(() => {
-    const targetWidth = ${Math.max(1, Math.round(width))};
-    let meta = document.querySelector('meta[name="viewport"]');
-    if (!meta) {
-      meta = document.createElement('meta');
-      meta.name = 'viewport';
-      (document.head || document.documentElement).appendChild(meta);
-    }
-    meta.content = 'width=' + targetWidth + ', initial-scale=1';
-    window.dispatchEvent(new Event('resize'));
-    return window.innerWidth;
-  })()`;
 }
 
 function getViewportSize() {
@@ -281,19 +329,16 @@ function getViewportSize() {
   };
 }
 
-function getManualPageWidth() {
-  if (!pageWidthSlider) return PAGE_WIDTH_MIN;
+function getZoomPercent() {
+  if (!pageWidthSlider) return PAGE_ZOOM_DEFAULT;
   const value = Number.parseInt(pageWidthSlider.value, 10);
-  if (!Number.isFinite(value)) return PAGE_WIDTH_MIN;
-  return Math.max(PAGE_WIDTH_MIN, value);
+  if (!Number.isFinite(value)) return PAGE_ZOOM_DEFAULT;
+  return Math.max(PAGE_ZOOM_MIN, Math.min(PAGE_ZOOM_MAX, value));
 }
 
 function updatePageWidthLabel() {
   if (pageWidthValue) {
-    const width = getManualPageWidth();
-    const tab = activeTabId != null ? tabs.get(activeTabId) : null;
-    const zoom = tab ? getPageZoomFactor(tab) : width / PAGE_WIDTH_BASE;
-    pageWidthValue.textContent = `${width}px · ${Math.round(zoom * 100)}%`;
+    pageWidthValue.textContent = `${getZoomPercent()}%`;
   }
   updateCrosshairPosition();
 }
@@ -301,14 +346,14 @@ function updatePageWidthLabel() {
 function renderRulerTicks() {
   if (!rulerTicksEl || !pageWidthSlider) return;
 
-  const min = Number(pageWidthSlider.min) || PAGE_WIDTH_MIN;
-  const max = Number(pageWidthSlider.max) || PAGE_WIDTH_MAX;
-  const step = Number(pageWidthSlider.step) || PAGE_WIDTH_STEP;
+  const min = Number(pageWidthSlider.min) || PAGE_ZOOM_MIN;
+  const max = Number(pageWidthSlider.max) || PAGE_ZOOM_MAX;
+  const step = Number(pageWidthSlider.step) || PAGE_ZOOM_STEP;
 
   rulerTicksEl.innerHTML = '';
   for (let value = min; value <= max; value += step) {
     const tick = document.createElement('span');
-    const isMajor = value % 400 === 0 || value === min || value === max;
+    const isMajor = value % 25 === 0 || value === min || value === max;
     tick.className = `width-tick ${isMajor ? 'major' : 'minor'}`;
     tick.style.left = `${((value - min) / (max - min)) * 100}%`;
     rulerTicksEl.appendChild(tick);
@@ -317,14 +362,14 @@ function renderRulerTicks() {
   updateCrosshairPosition();
 }
 
-function loadPageWidthMode() {
+function loadZoomMode() {
   if (!pageWidthSlider) return;
   try {
-    const saved = localStorage.getItem(PAGE_WIDTH_STORAGE_KEY);
+    const saved = localStorage.getItem(PAGE_ZOOM_STORAGE_KEY);
     if (saved) {
       const value = Number.parseInt(saved, 10);
-      if (Number.isFinite(value) && value >= PAGE_WIDTH_MIN) {
-        pageWidthSlider.value = String(Math.min(value, Number(pageWidthSlider.max) || PAGE_WIDTH_MAX));
+      if (Number.isFinite(value)) {
+        pageWidthSlider.value = String(Math.max(PAGE_ZOOM_MIN, Math.min(PAGE_ZOOM_MAX, value)));
       }
     }
   } catch (_err) {
@@ -333,50 +378,36 @@ function loadPageWidthMode() {
   updatePageWidthLabel();
 }
 
-function savePageWidthMode() {
+function saveZoomMode() {
   if (!pageWidthSlider) return;
   try {
-    localStorage.setItem(PAGE_WIDTH_STORAGE_KEY, String(getManualPageWidth()));
+    localStorage.setItem(PAGE_ZOOM_STORAGE_KEY, String(getZoomPercent()));
   } catch (_err) {
     // 忽略本地存储不可用
   }
 }
 
-function initPageWidthSlider() {
+function initZoomSlider() {
   if (!pageWidthSlider) return;
 
-  pageWidthSlider.min = String(PAGE_WIDTH_MIN);
-  pageWidthSlider.max = String(PAGE_WIDTH_MAX);
-  pageWidthSlider.step = String(PAGE_WIDTH_STEP);
+  pageWidthSlider.min = String(PAGE_ZOOM_MIN);
+  pageWidthSlider.max = String(PAGE_ZOOM_MAX);
+  pageWidthSlider.step = String(PAGE_ZOOM_STEP);
 
-  loadPageWidthMode();
-
-  try {
-    if (!localStorage.getItem(PAGE_WIDTH_STORAGE_KEY)) {
-      const viewport = getViewportSize();
-      if (viewport.width >= PAGE_WIDTH_MIN) {
-        pageWidthSlider.value = String(Math.max(PAGE_WIDTH_MIN, viewport.width));
-      }
-    }
-  } catch (_err) {
-    // 忽略本地存储不可用
-  }
+  loadZoomMode();
 
   updatePageWidthLabel();
   renderRulerTicks();
 }
 
 function getPageZoomFactor(tab) {
-  const target = getManualPageWidth();
-  const base = tab?.naturalWidth || PAGE_WIDTH_BASE;
-  const zoom = target / base;
-  return Math.max(PAGE_ZOOM_MIN, Math.min(PAGE_ZOOM_MAX, zoom));
+  return getZoomPercent() / 100;
 }
 
 function applyPageZoom(tab, zoom) {
   if (!tab?.webview) return;
 
-  const factor = Math.max(PAGE_ZOOM_MIN, Math.min(PAGE_ZOOM_MAX, zoom));
+  const factor = Math.max(PAGE_ZOOM_MIN / 100, Math.min(PAGE_ZOOM_MAX / 100, zoom));
   try {
     if (typeof tab.webview.setZoomFactor === 'function') {
       tab.webview.setZoomFactor(factor);
@@ -392,22 +423,11 @@ function applyPageZoom(tab, zoom) {
   }
 }
 
-async function applyPageLayoutWidth(tab, width) {
-  if (!tab?.webview) return;
-  try {
-    await executeInAllFrames(tab.webview, buildApplyPageLayoutScript(width));
-  } catch (_err) {
-    // 忽略注入失败
-  }
-}
-
 function applyPageDisplaySettings(tab) {
   if (!tab?.webview || tab.id !== activeTabId) return;
 
   const zoom = getPageZoomFactor(tab);
-  const width = getManualPageWidth();
   applyPageZoom(tab, zoom);
-  applyPageLayoutWidth(tab, width);
   updatePageWidthLabel();
 }
 
@@ -425,7 +445,7 @@ function togglePageWidthPanel(forceOpen) {
 function initPageWidthPanel() {
   if (!pageWidthSlider) return;
 
-  initPageWidthSlider();
+  initZoomSlider();
 
   if (btnPageWidth) {
     btnPageWidth.addEventListener('click', (e) => {
@@ -442,26 +462,28 @@ function initPageWidthPanel() {
   });
 
   pageWidthSlider.addEventListener('change', () => {
-    savePageWidthMode();
+    saveZoomMode();
     layoutWebviews();
     const tab = activeTabId != null ? tabs.get(activeTabId) : null;
     if (tab) applyPageDisplaySettings(tab);
   });
+
+  if (btnZoomReset) {
+    btnZoomReset.addEventListener('click', (e) => {
+      e.stopPropagation();
+      pageWidthSlider.value = String(PAGE_ZOOM_DEFAULT);
+      saveZoomMode();
+      layoutWebviews();
+      const tab = activeTabId != null ? tabs.get(activeTabId) : null;
+      if (tab) applyPageDisplaySettings(tab);
+    });
+  }
 
   document.addEventListener('click', (e) => {
     if (!pageWidthPanel || pageWidthPanel.classList.contains('is-hidden')) return;
     if (pageWidthPanel.contains(e.target) || btnPageWidth?.contains(e.target)) return;
     togglePageWidthPanel(false);
   });
-}
-
-function maybeExtendPageWidthMax(detectedWidth) {
-  if (!pageWidthSlider || !detectedWidth || detectedWidth <= PAGE_WIDTH_MAX) return;
-  const nextMax = Math.min(Math.ceil(detectedWidth / PAGE_WIDTH_STEP) * PAGE_WIDTH_STEP, 6000);
-  if (nextMax > Number(pageWidthSlider.max)) {
-    pageWidthSlider.max = String(nextMax);
-    renderRulerTicks();
-  }
 }
 
 function syncWebviewGuestSize(webview, width, height) {
@@ -482,13 +504,10 @@ function layoutWebviews() {
     const { webview, frame } = tab;
     if (tab.id === activeTabId && viewport.width > 0 && viewport.height > 0) {
       const zoom = getPageZoomFactor(tab);
-      const contentH = tab.contentHeight || viewport.height;
-      const frameHeight = Math.max(viewport.height, Math.round(contentH * zoom));
-
       frame.style.width = `${viewport.width}px`;
-      frame.style.height = `${frameHeight}px`;
+      frame.style.height = `${viewport.height}px`;
 
-      syncWebviewGuestSize(webview, viewport.width, frameHeight);
+      syncWebviewGuestSize(webview, viewport.width, viewport.height);
       applyPageZoom(tab, zoom);
     } else {
       frame.style.width = '0px';
@@ -521,12 +540,6 @@ async function updateTabContentSize(tab) {
 
     const viewport = getViewportSize();
     tab.contentHeight = maxH > 0 ? maxH : viewport.height;
-    if (maxW > 0) {
-      tab.naturalWidth = maxW;
-    } else if (!tab.naturalWidth) {
-      tab.naturalWidth = PAGE_WIDTH_BASE;
-    }
-    maybeExtendPageWidthMax(maxW);
     layoutWebviews();
     applyPageDisplaySettings(tab);
   } catch (_err) {
@@ -779,7 +792,6 @@ function createTab(url = DEFAULT_HOME) {
     webview,
     url,
     contentHeight: 0,
-    naturalWidth: 0,
     sizeRunId: 0
   };
   tabs.set(id, tab);
@@ -824,7 +836,7 @@ function bindWebviewEvents(tab) {
     scheduleContentSizeUpdate(tab);
     updateNavButtons();
     if (!autoCheckRunning) {
-      setStatus('就绪。点击标签栏「宽度」调节页面缩放，登录后点击「开始自动勾选」');
+      setStatus('就绪。点击标签栏「缩放」调节页面比例，登录后点击「开始自动勾选」');
     }
   });
 
@@ -878,7 +890,7 @@ function switchTab(id) {
   updateBookmarkButton();
 
   if (!autoCheckRunning) {
-    setStatus('就绪。点击标签栏「宽度」调节页面缩放，登录后点击「开始自动勾选」');
+    setStatus('就绪。点击标签栏「缩放」调节页面比例，登录后点击「开始自动勾选」');
   }
 
   if (webviewContainer) {
@@ -986,6 +998,65 @@ function mergePageState(results) {
 async function getPageCheckboxState(webview) {
   const results = await executeInAllFrames(webview, PAGE_STATE_SCRIPT);
   return mergePageState(results);
+}
+
+function normalizeSignaturePart(value) {
+  if (!value || typeof value !== 'object') return '';
+  return JSON.stringify({
+    url: value.url || '',
+    checkboxCount: value.checkboxCount || 0,
+    checkedCount: value.checkedCount || 0,
+    text: Array.isArray(value.textParts) ? value.textParts.join('|') : ''
+  });
+}
+
+function mergePageSignature(results) {
+  let loading = false;
+  const parts = [];
+
+  for (const value of results) {
+    if (!value || typeof value !== 'object') continue;
+    if (value.loading) loading = true;
+    parts.push(normalizeSignaturePart(value));
+  }
+
+  return {
+    loading,
+    value: parts.sort().join('||')
+  };
+}
+
+async function getPageSignature(webview) {
+  const results = await executeInAllFrames(webview, PAGE_SIGNATURE_SCRIPT);
+  return mergePageSignature(results);
+}
+
+async function waitForPageAdvance(webview, beforeSignature) {
+  const start = Date.now();
+  let sawLoading = false;
+
+  while (!autoCheckAbort) {
+    if (Date.now() - start > PAGE_ADVANCE_TIMEOUT_MS) {
+      return false;
+    }
+
+    const current = await getPageSignature(webview);
+    if (current.loading) {
+      sawLoading = true;
+    }
+
+    if (current.value !== beforeSignature.value) {
+      return true;
+    }
+
+    if (sawLoading && !current.loading) {
+      return true;
+    }
+
+    await sleep(PAGE_READY_POLL_MS);
+  }
+
+  return false;
 }
 
 async function waitForPageReady(webview, prevCount = null) {
@@ -1101,11 +1172,13 @@ async function runAutoCheck() {
 
       if (autoCheckAbort) break;
 
+      let beforeNextSignature = null;
       try {
         const pageState = await getPageCheckboxState(webview);
         countBeforeNext = pageState.count;
+        beforeNextSignature = await getPageSignature(webview);
       } catch (err) {
-        addLog(`读取第 ${pageNum} 页 checkbox 数量失败：${err.message}`, 'err');
+        addLog(`读取第 ${pageNum} 页状态失败：${err.message}`, 'err');
         break;
       }
 
@@ -1124,7 +1197,22 @@ async function runAutoCheck() {
         break;
       }
 
-      addLog(`点击「下一页」，等待第 ${pageNum + 1} 页 checkbox 就绪…`, 'ok');
+      let pageAdvanced = false;
+      try {
+        setStatus(`已点击「下一页」，正在确认第 ${pageNum + 1} 页是否加载…`);
+        pageAdvanced = await waitForPageAdvance(webview, beforeNextSignature);
+      } catch (err) {
+        addLog(`确认下一页加载失败：${err.message}`, 'err');
+        break;
+      }
+
+      if (!pageAdvanced) {
+        addLog('点击「下一页」后页面没有变化，已停止，避免重复勾选同一页', 'warn');
+        setStatus('已停止：下一页按钮没有触发页面变化');
+        break;
+      }
+
+      addLog(`已进入下一页，等待第 ${pageNum + 1} 页 checkbox 就绪…`, 'ok');
       pageNum++;
     }
 
